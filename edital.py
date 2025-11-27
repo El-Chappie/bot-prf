@@ -2,7 +2,6 @@
 
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import json
 import os
 import random
@@ -10,23 +9,15 @@ from datetime import datetime, timedelta
 
 ARQ_PROVA = "edital_prova_data.json"
 
-# CONFIGURAÇÕES DEFAULT - Você deve alterar pelo seu config ou passar pro cog
-# IDs que o cog vai usar para canais e cargos (substitua por seus IDs)
-DIRETOR_ROLE_IDS = []  # Ex: [1443387935700291697]
-CANAL_LOGS_ID = None  # Canal privado de logs da prova para diretores
-CANAL_ANUNCIOS_ID = None  # Canal público para anunciar resultado
+# CONFIGURAÇÕES DEFAULT - Você deve alterar ou usar o método configurar() para setar
+DIRETOR_ROLE_IDS = []  # Exemplo: [1443387935700291697]
+CANAL_LOGS_ID = None
+CANAL_ANUNCIOS_ID = None
 
-# Tempo mínimo entre tentativas em segundos
 COOLDOWN_SEGUNDOS = 3600
-
-# MINIMA para passar
 MIN_PONTUACAO = 6
-
-# Número máximo de perguntas na prova
 NUM_PERGUNTAS_PROVA = 10
 
-# Perguntas base - você pode expandir para perguntas reservas
-# Cada pergunta: texto, alternativas (lista 4), índice correta (0..3)
 PERGUNTAS = [
     {
         "pergunta": "Qual é a capital do Brasil?",
@@ -110,19 +101,21 @@ class EditalCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.dados = carregar_dados()
+        self.limpar_dados_antigos.start()
 
-    # Para configurar IDs após criar o cog
+    def cog_unload(self):
+        self.limpar_dados_antigos.cancel()
+
+    # Configurar IDs após criar o cog
     def configurar(self, diretor_roles: list, canal_logs_id: int, canal_anuncios_id: int):
         global DIRETOR_ROLE_IDS, CANAL_LOGS_ID, CANAL_ANUNCIOS_ID
         DIRETOR_ROLE_IDS = diretor_roles
         CANAL_LOGS_ID = canal_logs_id
         CANAL_ANUNCIOS_ID = canal_anuncios_id
 
-    # Verifica se usuário é diretor
     def eh_diretor(self, member: discord.Member):
         return any(role.id in DIRETOR_ROLE_IDS for role in member.roles)
 
-    # Comando para enviar o embed inicial explicando a prova e botão iniciar
     @commands.hybrid_command(name="enviarprova", description="Envia embed de explicação da prova (só diretores)")
     async def enviarprova(self, ctx: commands.Context):
         if not self.eh_diretor(ctx.author):
@@ -146,26 +139,28 @@ class EditalCog(commands.Cog):
                 super().__init__(timeout=None)
                 self.cog = cog
                 self.autor = autor
+                self.iniciado = False  # Previne múltiplos cliques
 
             @discord.ui.button(label="Iniciar Prova", style=discord.ButtonStyle.green, custom_id="botao_iniciar_prova")
             async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
                 if interaction.user != self.autor:
                     return await interaction.response.send_message("❌ Apenas quem clicou pode usar este botão.", ephemeral=True)
 
+                if self.iniciado:
+                    return await interaction.response.send_message("⏳ Prova já iniciada.", ephemeral=True)
+                self.iniciado = True
+
                 await self.cog.iniciar_prova(interaction.user, interaction)
-                # Remove botão para evitar reuso
                 self.clear_items()
                 await interaction.message.edit(view=self)
 
         view = BotaoIniciar(self, ctx.author)
         await ctx.send(embed=embed, view=view)
 
-    # Função que cria o canal privado e inicia a prova
     async def iniciar_prova(self, user: discord.Member, interaction: discord.Interaction):
         now = datetime.utcnow()
         uid = str(user.id)
 
-        # Verifica cooldown
         ult_tentativa = self.dados["tentativas"].get(uid)
         if ult_tentativa:
             dt_ultima = datetime.fromisoformat(ult_tentativa)
@@ -177,25 +172,21 @@ class EditalCog(commands.Cog):
                     ephemeral=True
                 )
 
-        # Seleciona perguntas sem repetição
         perguntas_disponiveis = list(range(len(PERGUNTAS)))
-        # Remove perguntas já usadas (prova atual = não tem, mas por segurança)
-        # Aqui vamos pegar 10 perguntas aleatórias
         if len(perguntas_disponiveis) < NUM_PERGUNTAS_PROVA:
             return await interaction.response.send_message(
                 "❌ Não há perguntas suficientes cadastradas para montar a prova.",
                 ephemeral=True
             )
+
         questoes_selecionadas = random.sample(perguntas_disponiveis, NUM_PERGUNTAS_PROVA)
 
-        # Embaralhar alternativas de cada pergunta e guardar o índice correto atualizado
         prova = []
         for idx in questoes_selecionadas:
             p = PERGUNTAS[idx]
             alt = p["alternativas"].copy()
             random.shuffle(alt)
-            # Atualiza índice correta
-            correta_original = p["alternativa_correta"] if "alternativa_correta" in p else p["correta"]
+            correta_original = p["correta"]  # corrigido aqui
             nova_correta = alt.index(p["alternativas"][correta_original])
             prova.append({
                 "pergunta": p["pergunta"],
@@ -203,7 +194,6 @@ class EditalCog(commands.Cog):
                 "correta": nova_correta
             })
 
-        # Criar canal privado para o usuário
         guild = user.guild
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -216,7 +206,6 @@ class EditalCog(commands.Cog):
             reason="Canal privado para prova edital"
         )
 
-        # Salvar prova e estado para o usuário
         self.dados["provas"][uid] = {
             "canal_id": canal.id,
             "data_inicio": now.isoformat(),
@@ -233,7 +222,6 @@ class EditalCog(commands.Cog):
         )
         await self.enviar_pergunta(user, canal)
 
-    # Envia pergunta atual no canal privado
     async def enviar_pergunta(self, user: discord.Member, canal: discord.TextChannel):
         uid = str(user.id)
         prova = self.dados["provas"].get(uid)
@@ -259,12 +247,12 @@ class EditalCog(commands.Cog):
         embed.add_field(name="Alternativas", value=texto_alts, inline=False)
         embed.set_footer(text="Responda clicando no botão correspondente.")
 
-        # Criar botões
         class ResponderView(discord.ui.View):
             def __init__(self, cog, user):
                 super().__init__(timeout=None)
                 self.cog = cog
                 self.user = user
+                self.respondido = False  # evita múltiplas respostas
 
             @discord.ui.button(label="A", style=discord.ButtonStyle.secondary, custom_id="resp_A")
             async def resp_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -285,6 +273,9 @@ class EditalCog(commands.Cog):
             async def processar_resposta(self, interaction: discord.Interaction, escolha: int):
                 if interaction.user != self.user:
                     return await interaction.response.send_message("❌ Este botão não é para você.", ephemeral=True)
+                if self.respondido:
+                    return await interaction.response.send_message("⏳ Você já respondeu esta questão.", ephemeral=True)
+                self.respondido = True
 
                 uid = str(self.user.id)
                 prova = self.cog.dados["provas"].get(uid)
@@ -302,22 +293,18 @@ class EditalCog(commands.Cog):
                 await interaction.response.send_message(f"✅ Resposta registrada: {['A','B','C','D'][escolha]}", ephemeral=True)
 
                 if prova["indice_atual"] >= NUM_PERGUNTAS_PROVA:
-                    # Finaliza prova
                     await self.cog.finalizar_prova(self.user)
                 else:
-                    # Envia próxima pergunta
                     canal = self.user.guild.get_channel(prova["canal_id"])
                     if canal:
                         await self.cog.enviar_pergunta(self.user, canal)
 
-                # Remove os botões antigos para evitar respostas duplicadas
                 self.clear_items()
                 await interaction.message.edit(view=self)
 
         view = ResponderView(self, user)
         await canal.send(embed=embed, view=view)
 
-    # Finaliza prova: calcula resultado, envia logs, anuncia e deleta canal
     async def finalizar_prova(self, user: discord.Member):
         uid = str(user.id)
         prova = self.dados["provas"].get(uid)
@@ -326,7 +313,6 @@ class EditalCog(commands.Cog):
         respostas = prova["respostas"]
         questoes = prova["questoes"]
 
-        # Calcula pontuação
         pontos = 0
         for i, resp in enumerate(respostas):
             if resp is not None and resp == questoes[i]["correta"]:
@@ -338,7 +324,6 @@ class EditalCog(commands.Cog):
         canal_logs = guild.get_channel(CANAL_LOGS_ID) if CANAL_LOGS_ID else None
         canal_anuncios = guild.get_channel(CANAL_ANUNCIOS_ID) if CANAL_ANUNCIOS_ID else None
 
-        # Monta embed log
         texto_respostas = ""
         letras = ["A", "B", "C", "D"]
         for i, (resp, questao) in enumerate(zip(respostas, questoes)):
@@ -356,14 +341,12 @@ class EditalCog(commands.Cog):
         )
         embed_log.set_footer(text="Sistema de Prova • Polícia Rodoviária Federal")
 
-        # Envia no canal privado de logs para diretores
         if canal_logs:
             try:
                 await canal_logs.send(embed=embed_log)
             except Exception:
                 pass
 
-        # Anuncia no canal público
         if canal_anuncios:
             emb_anuncio = discord.Embed(
                 title="Resultado da Prova",
@@ -377,7 +360,6 @@ class EditalCog(commands.Cog):
             except Exception:
                 pass
 
-        # Apaga canal privado
         canal = guild.get_channel(prova["canal_id"])
         if canal:
             try:
@@ -385,10 +367,32 @@ class EditalCog(commands.Cog):
             except Exception:
                 pass
 
-        # Remove prova da memória
         self.dados["provas"].pop(uid, None)
         salvar_dados(self.dados)
 
-    # Opcional: método para limpar dados antigos (não usado aqui)
     @tasks.loop(hours=24)
-    async def limpar_d
+    async def limpar_dados_antigos(self):
+        # Limpa dados de provas finalizadas com mais de 7 dias
+        agora = datetime.utcnow()
+        alterado = False
+
+        for uid, prova in list(self.dados["provas"].items()):
+            try:
+                data_inicio = datetime.fromisoformat(prova.get("data_inicio"))
+            except Exception:
+                continue
+            if (agora - data_inicio) > timedelta(days=7):
+                self.dados["provas"].pop(uid, None)
+                alterado = True
+
+        for uid, tentativa in list(self.dados["tentativas"].items()):
+            try:
+                data_tentativa = datetime.fromisoformat(tentativa)
+            except Exception:
+                continue
+            if (agora - data_tentativa) > timedelta(days=30):
+                self.dados["tentativas"].pop(uid, None)
+                alterado = True
+
+        if alterado:
+            salvar_dados(self.dados)
