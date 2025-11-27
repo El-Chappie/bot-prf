@@ -8,6 +8,10 @@ import os, json, traceback
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+from edital import EditalCog
+
+bot.add_cog(EditalCog(bot))
+
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
 
@@ -397,3 +401,4 @@ async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: s
 # RODA O BOT
 # ----------------------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
+
