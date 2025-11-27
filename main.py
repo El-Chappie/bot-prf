@@ -4,12 +4,12 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 import json, os, traceback
+import asyncio
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 from edital import Edital
-bot.add_cog(Edital(bot))
 
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
@@ -58,7 +58,13 @@ async def dm_safe(user, embed):
 
 @bot.event
 async def on_ready():
+
+    # CORREÇÃO PRINCIPAL: carregar o edital depois que o bot estiver pronto
+    await bot.add_cog(Edital(bot))
+
+    # Sincronizar slash commands (inclui os do edital)
     await bot.tree.sync()
+
     print(f"✅ BOT ONLINE — {bot.user}")
 
 # =========================
