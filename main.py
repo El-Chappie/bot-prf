@@ -1,27 +1,22 @@
-# main.py — BOT PRF (incorporar @user @role cargo nome) - com verificação EFETIVO
+# main.py — BOT PRF (Comandos oficiais e sistema administrativo completo)
 import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
-import os, json, traceback
+import json, os, traceback
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 from edital import Edital
-
 bot.add_cog(Edital(bot))
 
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
 
-# IDs fixos (já fornecidos)
 CARGO_CIVIL_ID = 1443537740821037136
 CARGO_PRF_ID = 1443387935700291697
 
-# ----------------------------------------
-# Helpers para arquivos
-# ----------------------------------------
 def carregar(arq, padrao):
     if not os.path.exists(arq):
         with open(arq, "w", encoding="utf-8") as f:
@@ -41,366 +36,195 @@ def salvar_adv():
     with open(ARQ_ADV, "w", encoding="utf-8") as f:
         json.dump(advertencias, f, indent=4)
 
-# ----------------------------------------
-# Utilitários
-# ----------------------------------------
-def eh_admin(membro: discord.Member) -> bool:
-    return any(r.id in config.get("admins", []) for r in membro.roles)
+def eh_admin(membro):
+    return any(r.id in config["admins"] for r in membro.roles)
 
-def embed_padrao(titulo: str, texto: str, cor: int = 0x2F3136) -> discord.Embed:
-    emb = discord.Embed(title=titulo, description=texto, color=cor)
-    emb.set_footer(text="PRF • Sistema Oficial")
-    return emb
+def embed_padrao(t, d, c=0x2F3136):
+    e = discord.Embed(title=t, description=d, color=c)
+    e.set_footer(text="PRF • Sistema Oficial")
+    return e
 
-async def enviar(guild: discord.Guild, canal_id: int, embed: discord.Embed):
-    if not canal_id:
-        return
-    canal = guild.get_channel(canal_id)
-    if canal:
-        await canal.send(embed=embed)
-    else:
-        # tenta buscar por API se não estiver em cache
-        try:
-            canal = await bot.fetch_channel(canal_id)
-            if canal:
-                await canal.send(embed=embed)
-        except Exception:
-            print("Erro ao enviar embed: canal não encontrado / sem permissão")
+async def enviar(guild, canal_id, embed):
+    if canal_id:
+        canal = guild.get_channel(canal_id)
+        if canal:
+            await canal.send(embed=embed)
 
-async def dm_safe(user: discord.Member, embed: discord.Embed):
+async def dm_safe(user, embed):
     try:
         await user.send(embed=embed)
-    except Exception:
+    except:
         pass
 
-# ----------------------------------------
-# Ready
-# ----------------------------------------
 @bot.event
 async def on_ready():
-    try:
-        await bot.tree.sync()
-    except Exception:
-        pass
-    print(f"✅ BOT PRF ONLINE — {bot.user}")
+    await bot.tree.sync()
+    print(f"✅ BOT ONLINE — {bot.user}")
 
-# ----------------------------------------
-# Config commands
-# ----------------------------------------
-@bot.tree.command(name="config-admin", description="Define cargo administrativo (menção)")
-async def config_admin(inter: discord.Interaction, cargo: discord.Role):
-    if not inter.user.guild_permissions.administrator:
-        return await inter.response.send_message("❌ Apenas administradores do servidor.", ephemeral=True)
-    if cargo.id not in config["admins"]:
-        config["admins"].append(cargo.id)
-        salvar_config()
-    await inter.response.send_message(f"✅ Cargo {cargo.mention} adicionado como ADMIN do sistema.", ephemeral=True)
+# =========================
+# CONFIGURAÇÕES
+# =========================
+@bot.tree.command(name="config-admin")
+async def config_admin(i: discord.Interaction, cargo: discord.Role):
+    if not i.user.guild_permissions.administrator:
+        return await i.response.send_message("❌ Apenas administradores.", ephemeral=True)
+    config["admins"].append(cargo.id)
+    salvar_config()
+    await i.response.send_message("✅ Cargo definido como ADMIN.", ephemeral=True)
 
-@bot.tree.command(name="config-folha", description="Define o canal da folha da PRF")
-async def config_folha(inter: discord.Interaction, canal: discord.TextChannel):
-    if not inter.user.guild_permissions.administrator:
-        return await inter.response.send_message("❌ Apenas administradores.", ephemeral=True)
+@bot.tree.command(name="config-folha")
+async def config_folha(i: discord.Interaction, canal: discord.TextChannel):
     config["canal_folha"] = canal.id
     salvar_config()
-    await inter.response.send_message(f"✅ Canal da folha definido: {canal.mention}", ephemeral=True)
+    await i.response.send_message("✅ Canal da folha definido.", ephemeral=True)
 
-@bot.tree.command(name="config-logs", description="Define o canal de logs da PRF")
-async def config_logs(inter: discord.Interaction, canal: discord.TextChannel):
-    if not inter.user.guild_permissions.administrator:
-        return await inter.response.send_message("❌ Apenas administradores.", ephemeral=True)
+@bot.tree.command(name="config-logs")
+async def config_logs(i: discord.Interaction, canal: discord.TextChannel):
     config["canal_logs"] = canal.id
     salvar_config()
-    await inter.response.send_message(f"✅ Canal de logs definido: {canal.mention}", ephemeral=True)
+    await i.response.send_message("✅ Canal de logs definido.", ephemeral=True)
 
-# ----------------------------------------
-# INCORPORAR — formato exigido:
+# =========================
+# INCORPORAÇÃO
 # /incorporar @user @role cargo nome
-# ----------------------------------------
-@bot.tree.command(name="incorporar", description="Incorporar servidor à PRF — /incorporar @user @role cargo nome")
-@app_commands.describe(
-    membro="Usuário a ser incorporado (menção)",
-    role="Role a ser aplicado (menção)",
-    cargo_text="Nome do cargo (texto para nickname)",
-    nome="Nome funcional a aplicar no nickname"
-)
-async def incorporar(inter: discord.Interaction, membro: discord.Member, role: discord.Role, cargo_text: str, nome: str):
-    if not eh_admin(inter.user):
-        return await inter.response.send_message("❌ Você não possui autorização.", ephemeral=True)
+# =========================
+@bot.tree.command(name="incorporar")
+async def incorporar(i: discord.Interaction, membro: discord.Member, role: discord.Role, cargo: str, nome: str):
+    if not eh_admin(i.user):
+        return await i.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    guild = inter.guild
-    prf_role = guild.get_role(CARGO_PRF_ID)
-    civil_role = guild.get_role(CARGO_CIVIL_ID)
+    guild = i.guild
+    prf = guild.get_role(CARGO_PRF_ID)
 
-    if not prf_role:
-        return await inter.response.send_message("❌ Cargo PRF EFETIVO não encontrado no servidor.", ephemeral=True)
+    for r in membro.roles:
+        if r != guild.default_role:
+            await membro.remove_roles(r)
 
-    # Remove todos os cargos (exceto @everyone)
-    try:
-        remove_list = [r for r in membro.roles if r != guild.default_role]
-        if remove_list:
-            await membro.remove_roles(*remove_list, reason=f"Incorporação por {inter.user}")
-    except Exception:
-        print("⚠️ Falha ao remover roles antes de incorporar:", traceback.format_exc())
+    await membro.add_roles(prf, role)
+    await membro.edit(nick=f"『PRF』{cargo}│{nome}")
 
-    # Adiciona PRF EFETIVO + role mencionado
-    try:
-        await membro.add_roles(prf_role, role, reason=f"Incorporação por {inter.user}")
-    except Exception:
-        return await inter.response.send_message("❌ Erro ao aplicar cargos. Verifique permissões do bot (Manage Roles & posição do cargo).", ephemeral=True)
+    texto = f"""A PRF torna pública a INCORPORAÇÃO:
 
-    # Monta nick no padrão: 『PRF』Cargo│Nome
-    novo_nick = f"『PRF』{cargo_text}│{nome}"
-    try:
-        await membro.edit(nick=novo_nick, reason="Incorporação PRF")
-    except Exception:
-        # não falhar o comando se não puder renomear (permissão/cargo acima)
-        print("⚠️ Falha ao editar nick:", traceback.format_exc())
+👮 Servidor: {membro.mention}
+🏅 Cargo: {cargo}
+🆔 Role: {role.mention}
+📌 Situação: EFETIVO
+🧑‍⚖️ Autoridade: {i.user.mention}
+📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}"""
 
-    # Mensagem formal
-    texto = (
-        "A Polícia Rodoviária Federal torna pública a seguinte INCORPORAÇÃO:\n\n"
-        f"👮 **Servidor:** {membro.mention}\n"
-        f"🏅 **Cargo funcional:** {cargo_text}\n"
-        f"🆔 **Role aplicado:** {role.mention}\n"
-        f"📌 **Situação:** EFETIVO ATIVO\n"
-        f"🧑‍⚖️ **Autoridade:** {inter.user.mention}\n"
-        f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
+    emb = embed_padrao("📋 TERMO DE INCORPORAÇÃO", texto, 0x3498DB)
 
-    emb = embed_padrao("📋 TERMO OFICIAL DE INCORPORAÇÃO", texto, 0x3498DB)
-
-    await inter.response.send_message("✅ Incorporação realizada com sucesso.", ephemeral=True)
-    await enviar(guild, config.get("canal_folha"), emb)
-    await enviar(guild, config.get("canal_logs"), emb)
+    await i.response.send_message("✅ Incorporação realizada.", ephemeral=True)
+    await enviar(guild, config["canal_folha"], emb)
+    await enviar(guild, config["canal_logs"], emb)
     await dm_safe(membro, emb)
 
-# ----------------------------------------
-# PROMOVER — exige @role + cargo_text (para nick)
-# /promover @user @role cargo_text
-# ----------------------------------------
-@bot.tree.command(name="promover", description="Promover servidor — /promover @user @role cargo_text")
-@app_commands.describe(
-    membro="Usuário a promover (menção)",
-    role="Role a aplicar (menção)",
-    cargo_text="Nome do cargo (texto para nickname)"
-)
-async def promover(inter: discord.Interaction, membro: discord.Member, role: discord.Role, cargo_text: str):
-    if not eh_admin(inter.user):
-        return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
+# =========================
+# PROMOVER
+# =========================
+@bot.tree.command(name="promover")
+async def promover(i: discord.Interaction, membro: discord.Member, role: discord.Role, cargo: str):
+    if not eh_admin(i.user):
+        return await i.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    guild = inter.guild
-    prf_role = guild.get_role(CARGO_PRF_ID)
+    for r in membro.roles:
+        if r.id != CARGO_PRF_ID and r != i.guild.default_role:
+            await membro.remove_roles(r)
 
-    # Verifica se é servidor registrado (possui PRF EFETIVO)
-    if not prf_role or prf_role not in membro.roles:
-        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+    await membro.add_roles(role)
+    await membro.edit(nick=f"『PRF』{cargo}│{membro.display_name}")
 
-    # Remove roles PRF (mantém apenas efetivo se quiser), aqui removemos todos exceto default and prf
-    try:
-        remove_list = [r for r in membro.roles if r != guild.default_role and r.id != CARGO_PRF_ID]
-        if remove_list:
-            await membro.remove_roles(*remove_list, reason=f"Promoção por {inter.user}")
-    except Exception:
-        print("⚠️ Falha ao remover roles antes da promoção:", traceback.format_exc())
+    texto = f"""ATO DE PROMOÇÃO:
 
-    try:
-        await membro.add_roles(role, reason=f"Promoção por {inter.user}")
-    except Exception:
-        return await inter.response.send_message("❌ Erro ao aplicar cargo de promoção. Verifique permissões.", ephemeral=True)
+👮 Servidor: {membro.mention}
+🏅 Novo cargo: {cargo}
+🆔 Role: {role.mention}
+🧑‍⚖️ Autoridade: {i.user.mention}
+📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}"""
 
-    # Atualiza nick
-    novo_nick = f"『PRF』{cargo_text}│{membro.display_name}"
-    try:
-        await membro.edit(nick=novo_nick, reason="Promoção PRF")
-    except Exception:
-        print("⚠️ Falha ao editar nick na promoção:", traceback.format_exc())
+    emb = embed_padrao("📈 PROMOÇÃO", texto, 0x2ECC71)
 
-    texto = (
-        "A Direção da PRF resolve PROMOVER o servidor abaixo:\n\n"
-        f"👮 **Servidor:** {membro.mention}\n"
-        f"🏅 **Novo cargo:** {cargo_text}\n"
-        f"🆔 **Role aplicado:** {role.mention}\n"
-        f"🧑‍⚖️ **Autoridade:** {inter.user.mention}\n"
-        f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-
-    emb = embed_padrao("📈 ATO DE PROMOÇÃO", texto, 0x2ECC71)
-    await inter.response.send_message("✅ Promoção registrada.", ephemeral=True)
-    await enviar(guild, config.get("canal_folha"), emb)
-    await enviar(guild, config.get("canal_logs"), emb)
+    await i.response.send_message("✅ Promoção efetuada.", ephemeral=True)
+    await enviar(i.guild, config["canal_folha"], emb)
+    await enviar(i.guild, config["canal_logs"], emb)
     await dm_safe(membro, emb)
 
-# ----------------------------------------
-# REBAIXAR — exige @role + cargo_text + motivo
-# /rebaixar @user @role cargo_text motivo
-# ----------------------------------------
-@bot.tree.command(name="rebaixar", description="Rebaixar servidor — /rebaixar @user @role cargo_text motivo")
-@app_commands.describe(
-    membro="Usuário a rebaixar (menção)",
-    role="Role a aplicar (menção)",
-    cargo_text="Novo nome do cargo (texto para nickname)",
-    motivo="Motivo do rebaixamento"
-)
-async def rebaixar(inter: discord.Interaction, membro: discord.Member, role: discord.Role, cargo_text: str, motivo: str):
-    if not eh_admin(inter.user):
-        return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
+# =========================
+# REBAIXAR
+# =========================
+@bot.tree.command(name="rebaixar")
+async def rebaixar(i: discord.Interaction, membro: discord.Member, role: discord.Role, cargo: str, motivo: str):
+    if not eh_admin(i.user):
+        return await i.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    guild = inter.guild
-    prf_role = guild.get_role(CARGO_PRF_ID)
+    for r in membro.roles:
+        if r.id != CARGO_PRF_ID and r != i.guild.default_role:
+            await membro.remove_roles(r)
 
-    # Verifica se é servidor registrado (possui PRF EFETIVO)
-    if not prf_role or prf_role not in membro.roles:
-        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+    await membro.add_roles(role)
+    await membro.edit(nick=f"『PRF』{cargo}│{membro.display_name}")
 
-    try:
-        remove_list = [r for r in membro.roles if r != guild.default_role and r.id != CARGO_PRF_ID]
-        if remove_list:
-            await membro.remove_roles(*remove_list, reason=f"Rebaixamento por {inter.user}")
-    except Exception:
-        print("⚠️ Falha ao remover roles antes do rebaixamento:", traceback.format_exc())
+    emb = embed_padrao("📉 REBAIXAMENTO",
+        f"""Servidor: {membro.mention}
+Novo cargo: {cargo}
+Motivo: {motivo}
+Autoridade: {i.user.mention}
+Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}""",
+        0xE67E22)
 
-    try:
-        await membro.add_roles(role, reason=f"Rebaixamento por {inter.user}")
-    except Exception:
-        return await inter.response.send_message("❌ Erro ao aplicar cargo de rebaixamento. Verifique permissões.", ephemeral=True)
+    await i.response.send_message("✅ Rebaixamento registrado.", ephemeral=True)
+    await enviar(i.guild, config["canal_folha"], emb)
+    await enviar(i.guild, config["canal_logs"], emb)
 
-    novo_nick = f"『PRF』{cargo_text}│{membro.display_name}"
-    try:
-        await membro.edit(nick=novo_nick, reason="Rebaixamento PRF")
-    except Exception:
-        print("⚠️ Falha ao editar nick no rebaixamento:", traceback.format_exc())
-
-    texto = (
-        "A Direção da PRF resolve REBAIXAR o servidor abaixo:\n\n"
-        f"👮 **Servidor:** {membro.mention}\n"
-        f"🏅 **Novo cargo:** {cargo_text}\n"
-        f"📄 **Motivo:** {motivo}\n"
-        f"🧑‍⚖️ **Autoridade:** {inter.user.mention}\n"
-        f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-
-    emb = embed_padrao("📉 ATO DE REBAIXAMENTO", texto, 0xE67E22)
-    await inter.response.send_message("✅ Rebaixamento registrado.", ephemeral=True)
-    await enviar(guild, config.get("canal_folha"), emb)
-    await enviar(guild, config.get("canal_logs"), emb)
-    await dm_safe(membro, emb)
-
-# ----------------------------------------
-# ADVERTIR — registra e exonerar automaticamente na 3ª
-# /advertir @user motivo
-# ----------------------------------------
-@bot.tree.command(name="advertir", description="Advertir servidor — 3 advertências = exoneração automática")
-@app_commands.describe(
-    membro="Usuário a advertir (menção)",
-    motivo="Motivo da advertência"
-)
-async def advertir(inter: discord.Interaction, membro: discord.Member, motivo: str):
-    if not eh_admin(inter.user):
-        return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
-
-    guild = inter.guild
-    prf_role = guild.get_role(CARGO_PRF_ID)
-
-    # Verifica se é servidor registrado (possui PRF EFETIVO)
-    if not prf_role or prf_role not in membro.roles:
-        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
-
+# =========================
+# ADVERTIR
+# =========================
+@bot.tree.command(name="advertir")
+async def advertir(i: discord.Interaction, membro: discord.Member, motivo: str):
     uid = str(membro.id)
     lista = advertencias.get(uid, [])
-    lista.append({"motivo": motivo, "autor": inter.user.id, "data": datetime.now().strftime("%d/%m/%Y %H:%M")})
+    lista.append(motivo)
     advertencias[uid] = lista
     salvar_adv()
 
-    # Se chegou a 3, exonerar automaticamente
     if len(lista) >= 3:
-        # chama a função interna de exoneração (mesma lógica)
-        motivo_ex = "Excesso de advertências (3/3)"
-        # zera advertências
-        advertencias.pop(uid, None)
+        await exonerar(i, membro, "3 advertências acumuladas.")
+        advertencias.pop(uid)
         salvar_adv()
-        # executa exoneração
-        await exonerar(inter, membro, motivo_ex)
         return
 
-    texto = (
-        "A Direção da PRF aplica ADVERTÊNCIA DISCIPLINAR:\n\n"
-        f"👮 **Servidor:** {membro.mention}\n"
-        f"⚠️ **Advertência Nº:** {len(lista)}\n"
-        f"📄 **Motivo:** {motivo}\n"
-        f"🧑‍⚖️ **Autoridade:** {inter.user.mention}\n"
-        f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
+    emb = embed_padrao("⚠️ ADVERTÊNCIA",
+        f"""Servidor: {membro.mention}
+Advertência Nº {len(lista)}
+Motivo: {motivo}
+Autoridade: {i.user.mention}""",0xF1C40F)
 
-    emb = embed_padrao("⚠️ ADVERTÊNCIA DISCIPLINAR", texto, 0xF1C40F)
-    await inter.response.send_message("✅ Advertência registrada.", ephemeral=True)
-    await enviar(inter.guild, config.get("canal_folha"), emb)
-    await enviar(inter.guild, config.get("canal_logs"), emb)
+    await i.response.send_message("✅ Advertência aplicada.", ephemeral=True)
+    await enviar(i.guild, config["canal_logs"], emb)
     await dm_safe(membro, emb)
 
-# ----------------------------------------
-# EXONERAR — remove todos os cargos, adiciona CIVIL e remove nickname
-# /exonerar @user motivo
-# ----------------------------------------
-@bot.tree.command(name="exonerar", description="Exonerar servidor da PRF — remove cargos e reseta nick")
-@app_commands.describe(
-    membro="Usuário a exonerar (menção)",
-    motivo="Motivo da exoneração"
-)
-async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: str):
-    if not eh_admin(inter.user):
-        return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
+# =========================
+# EXONERAR
+# =========================
+@bot.tree.command(name="exonerar")
+async def exonerar(i: discord.Interaction, membro: discord.Member, motivo: str):
+    civil = i.guild.get_role(CARGO_CIVIL_ID)
 
-    guild = inter.guild
-    prf_role = guild.get_role(CARGO_PRF_ID)
+    for r in membro.roles:
+        if r != i.guild.default_role:
+            await membro.remove_roles(r)
 
-    # Verifica se é servidor registrado (possui PRF EFETIVO)
-    if not prf_role or prf_role not in membro.roles:
-        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+    await membro.add_roles(civil)
+    await membro.edit(nick=None)
 
-    civil_role = guild.get_role(CARGO_CIVIL_ID)
-    if not civil_role:
-        return await inter.response.send_message("❌ Role CIVIL não encontrado no servidor.", ephemeral=True)
+    emb = embed_padrao("🚨 EXONERAÇÃO",
+        f"""Servidor: {membro.mention}
+Motivo: {motivo}
+Autoridade: {i.user.mention}""",0xC0392B)
 
-    try:
-        remove_list = [r for r in membro.roles if r != guild.default_role]
-        if remove_list:
-            await membro.remove_roles(*remove_list, reason=f"Exoneração por {inter.user}")
-    except Exception:
-        print("⚠️ Falha ao remover roles na exoneração:", traceback.format_exc())
-
-    try:
-        await membro.add_roles(civil_role, reason=f"Exoneração por {inter.user}")
-    except Exception:
-        return await inter.response.send_message("❌ Erro ao adicionar cargo CIVIL. Verifique permissões.", ephemeral=True)
-
-    # Remove nickname (reseta para padrão)
-    try:
-        await membro.edit(nick=None, reason="Exoneração PRF")
-    except Exception:
-        print("⚠️ Falha ao remover nickname:", traceback.format_exc())
-
-    # Limpa advertências
-    advertencias.pop(str(membro.id), None)
-    salvar_adv()
-
-    texto = (
-        "A Polícia Rodoviária Federal resolve EXONERAR o servidor abaixo:\n\n"
-        f"👤 **Servidor:** {membro.mention}\n"
-        f"📄 **Motivo:** {motivo}\n"
-        f"🧑‍⚖️ **Autoridade:** {inter.user.mention}\n"
-        f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-
-    emb = embed_padrao("🚨 ATO DE EXONERAÇÃO", texto, 0xC0392B)
-    await inter.response.send_message("✅ Exoneração executada.", ephemeral=True)
-    await enviar(guild, config.get("canal_folha"), emb)
-    await enviar(guild, config.get("canal_logs"), emb)
+    await i.response.send_message("✅ Exoneração realizada.", ephemeral=True)
+    await enviar(i.guild, config["canal_folha"], emb)
+    await enviar(i.guild, config["canal_logs"], emb)
     await dm_safe(membro, emb)
 
-# ----------------------------------------
-# RODA O BOT
-# ----------------------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
-
-
-
