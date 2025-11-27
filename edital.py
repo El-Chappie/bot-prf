@@ -1,4 +1,4 @@
-# edital.py — Sistema de Edital PRF (Corrigido e Estável)
+# edital.py
 import discord
 from discord.ext import commands, tasks
 import json
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 ARQ_PROVA = "edital_prova_data.json"
 
-# Canais (serão configurados por comando)
+DIRETOR_ROLE_IDS = []
 CANAL_RESULT_ID = None
 CANAL_LOG_ID = None
 
@@ -16,21 +16,18 @@ COOLDOWN_SEGUNDOS = 3600
 NUM_PERGUNTAS = 10
 MIN_PONTOS = 6
 
-# Banco de perguntas (adicione mais)
 PERGUNTAS = [
-    {"pergunta": "Qual é a capital do Brasil?", "alternativas": ["Rio", "Brasília", "São Paulo", "Salvador"], "correta": 1},
-    {"pergunta": "Maior planeta do sistema solar?", "alternativas": ["Terra", "Marte", "Júpiter", "Saturno"], "correta": 2},
+    {"pergunta": "Capital do Brasil?", "alternativas": ["Rio", "Brasília", "São Paulo", "Recife"], "correta": 1},
+    {"pergunta": "Maior planeta?", "alternativas": ["Terra", "Marte", "Júpiter", "Saturno"], "correta": 2},
     {"pergunta": "Fórmula da água?", "alternativas": ["H2O", "CO2", "O2", "NaCl"], "correta": 0},
-    {"pergunta": "Cor da farda oficial da PRF?", "alternativas": ["Azul", "Preta", "Cinza", "Verde"], "correta": 1},
-    {"pergunta": "Sigla PRF significa?", "alternativas": ["Polícia Rodoviária Federal","Polícia Regional Federal","Patrulha Rodoviária Fixa","Polícia Federal Rodoviária"], "correta": 0},
-    {"pergunta": "Cargo mais alto da PRF?", "alternativas": ["Diretor-Geral","Supervisor","Inspetor","Delegado"], "correta": 0},
-    {"pergunta": "Função principal da PRF?", "alternativas": ["Investigar crimes","Patrulhar rodovias","Policiamento aéreo","Polícia civil"], "correta": 1},
-    {"pergunta": "O que é hierarquia?", "alternativas": ["Ordem","Respeito","Classificação por cargo","Educação"], "correta": 2},
-    {"pergunta": "Quem comanda uma operação?", "alternativas": ["Civil","Inspetor","Diretor ou Delegado","Aluno"], "correta": 2},
-    {"pergunta": "Símbolo da PRF?", "alternativas": ["Águia","Onça","Leão","Lobo"], "correta": 0},
-    # reservas
-    {"pergunta": "Tempo máximo de prova?", "alternativas": ["30 min","60 min","Livre","10 min"], "correta": 1},
-    {"pergunta": "Reprovação ocorre com?", "alternativas": ["5 erros","4 erros","6 acertos mínimos","Livre"], "correta": 2}
+    {"pergunta": "Ano do descobrimento do Brasil?", "alternativas": ["1498", "1500", "1510", "1600"], "correta": 1},
+    {"pergunta": "Criador do Python?", "alternativas": ["Linus", "Bill", "Guido", "Mark"], "correta": 2},
+    {"pergunta": "Primeiro presidente do Brasil?", "alternativas": ["Getúlio", "Deodoro", "Lula", "Sarney"], "correta": 1},
+    {"pergunta": "Base da programação?", "alternativas": ["Lógica", "HTML", "CSS", "SQL"], "correta": 0},
+    {"pergunta": "Maior oceano?", "alternativas": ["Atlântico", "Indico", "Pacífico", "Ártico"], "correta": 2},
+    {"pergunta": "Sistema do Discord?", "alternativas": ["Slack", "Teams", "Guilds", "Servers"], "correta": 3},
+    {"pergunta": "Python é?", "alternativas": ["Compilado", "Interpretado", "Binário", "Assembly"], "correta": 1},
+    {"pergunta": "RAM significa?", "alternativas": ["Read", "Random", "Run", "Rapid"], "correta": 1}
 ]
 
 def carregar():
@@ -43,48 +40,51 @@ def salvar(dados):
     with open(ARQ_PROVA, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
 
+
 class Edital(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.dados = carregar()
         self.result_channel = CANAL_RESULT_ID
         self.log_channel = CANAL_LOG_ID
-
-    async def cog_load(self):
         self._limpar.start()
 
     def cog_unload(self):
         self._limpar.cancel()
 
-    # ---------------- CONFIGURAÇÃO ----------------
-    @commands.hybrid_command(name="setprovaresult", description="Define canal público de resultado")
+    @commands.hybrid_command(name="setprovaresult")
     @commands.has_permissions(administrator=True)
     async def setprovaresult(self, ctx, canal: discord.TextChannel):
         self.result_channel = canal.id
-        await ctx.reply(f"✅ Canal público definido: {canal.mention}", ephemeral=True)
+        await ctx.reply(embed=discord.Embed(
+            title="✅ Configurado",
+            description=f"Canal de resultados definido: {canal.mention}",
+            color=0x2ecc71
+        ), ephemeral=True)
 
-    @commands.hybrid_command(name="setprovaresultlog", description="Define canal privado de logs")
+    @commands.hybrid_command(name="setprovaresultlog")
     @commands.has_permissions(administrator=True)
     async def setprovaresultlog(self, ctx, canal: discord.TextChannel):
         self.log_channel = canal.id
-        await ctx.reply(f"✅ Canal de logs definido: {canal.mention}", ephemeral=True)
+        await ctx.reply(embed=discord.Embed(
+            title="✅ Configurado",
+            description=f"Canal de logs definido: {canal.mention}",
+            color=0x2ecc71
+        ), ephemeral=True)
 
-    # ---------------- INICIAR PROVA ----------------
-    @commands.hybrid_command(name="enviarprova", description="Enviar prova a um usuário")
-    @commands.has_permissions(administrator=True)
+    @commands.hybrid_command(name="enviarprova")
     async def enviarprova(self, ctx, usuario: discord.Member):
+
+        if not (ctx.author.guild_permissions.administrator or any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles)):
+            await ctx.reply(embed=discord.Embed(title="❌ Sem permissão", description="Acesso restrito.", color=0xe74c3c), ephemeral=True)
+            return
+
         uid = str(usuario.id)
         agora = datetime.utcnow()
 
-        ultima = self.dados["tentativas"].get(uid)
-        if ultima:
-            diff = agora - datetime.fromisoformat(ultima)
-            if diff.total_seconds() < COOLDOWN_SEGUNDOS:
-                restante = int((COOLDOWN_SEGUNDOS - diff.total_seconds()) // 60)
-                return await ctx.reply(f"⏳ Tente novamente em {restante} minutos.", ephemeral=True)
-
-        if len(PERGUNTAS) < NUM_PERGUNTAS:
-            return await ctx.reply("❌ Perguntas insuficientes.", ephemeral=True)
+        if uid in self.dados["tentativas"]:
+            await ctx.reply(embed=discord.Embed(title="⏳ Bloqueado", description="Usuário em cooldown.", color=0xf1c40f), ephemeral=True)
+            return
 
         perguntas = random.sample(PERGUNTAS, NUM_PERGUNTAS)
         questoes = []
@@ -95,114 +95,82 @@ class Edital(commands.Cog):
             correta = alts.index(p["alternativas"][p["correta"]])
             questoes.append({"pergunta": p["pergunta"], "alternativas": alts, "correta": correta})
 
-        self.dados["provas"][uid] = {
-            "questoes": questoes,
-            "respostas": [],
-            "indice": 0,
-            "inicio": agora.isoformat()
-        }
-
+        self.dados["provas"][uid] = {"questoes": questoes, "respostas": [], "indice": 0, "inicio": agora.isoformat()}
         self.dados["tentativas"][uid] = agora.isoformat()
         salvar(self.dados)
 
         try:
-            await usuario.send(embed=discord.Embed(
-                title="📑 Prova PRF",
-                description="Responda A, B, C ou D em cada pergunta.",
-                color=0x3498DB
-            ))
+            await usuario.send(embed=discord.Embed(title="📄 Prova", description="Responda A / B / C / D", color=0x3498db))
             await self._enviar_pergunta(usuario)
-            await ctx.reply("✅ Prova enviada.", ephemeral=True)
+            await ctx.reply(embed=discord.Embed(description="✅ Prova enviada", color=0x2ecc71), ephemeral=True)
         except:
-            await ctx.reply("❌ Usuário com DM fechada.", ephemeral=True)
+            await ctx.reply(embed=discord.Embed(description="❌ DM fechada", color=0xe74c3c), ephemeral=True)
 
-    async def _enviar_pergunta(self, usuario):
-        prova = self.dados["provas"].get(str(usuario.id))
-        i = prova["indice"]
-        q = prova["questoes"][i]
-        letras = ["A","B","C","D"]
+    async def _enviar_pergunta(self, user):
+        uid = str(user.id)
+        p = self.dados["provas"][uid]
+        q = p["questoes"][p["indice"]]
+        letras = ["A", "B", "C", "D"]
+        texto = "\n".join(f"**{letras[i]}** — {alt}" for i, alt in enumerate(q["alternativas"]))
 
-        texto = "\n".join([f"**{letras[n]}** — {alt}" for n, alt in enumerate(q["alternativas"])])
-        emb = discord.Embed(title=f"Questão {i+1}/{NUM_PERGUNTAS}", description=f"{q['pergunta']}\n\n{texto}", color=0x2F3136)
-        await usuario.send(embed=emb)
+        embed = discord.Embed(title=f"Questão {p['indice']+1}/{NUM_PERGUNTAS}", description=q["pergunta"] + "\n\n" + texto, color=0x95a5a6)
+        await user.send(embed=embed)
 
-    # ---------------- RESPOSTAS ----------------
     @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or not isinstance(message.channel, discord.DMChannel):
+    async def on_message(self, msg):
+        if msg.author.bot or not isinstance(msg.channel, discord.DMChannel):
             return
-
-        uid = str(message.author.id)
+        uid = str(msg.author.id)
         if uid not in self.dados["provas"]:
             return
 
-        resposta = message.content.strip().upper()
-        if resposta not in ("A","B","C","D"):
-            return await message.channel.send("Responda apenas A, B, C ou D.")
+        r = msg.content.upper()
+        if r not in ("A", "B", "C", "D"):
+            await msg.channel.send(embed=discord.Embed(description="❌ Envie apenas A/B/C/D", color=0xe74c3c))
+            return
 
         prova = self.dados["provas"][uid]
-        prova["respostas"].append(["A","B","C","D"].index(resposta))
+        prova["respostas"].append(["A","B","C","D"].index(r))
         prova["indice"] += 1
         salvar(self.dados)
 
         if prova["indice"] < NUM_PERGUNTAS:
-            await self._enviar_pergunta(message.author)
+            await self._enviar_pergunta(msg.author)
         else:
-            await self._finalizar_prova(message.author)
+            await self._finalizar(msg.author)
 
-    async def _finalizar_prova(self, usuario):
-        uid = str(usuario.id)
+    async def _finalizar(self, user):
+        uid = str(user.id)
         prova = self.dados["provas"][uid]
+        pontos = sum(1 for i,q in enumerate(prova["questoes"]) if prova["respostas"][i] == q["correta"])
+        aprovado = pontos >= MIN_PONTOS
+        status = "✅ APROVADO" if aprovado else "❌ REPROVADO"
 
-        pontos = 0
-        letras = ["A","B","C","D"]
-        detalhes = ""
-
-        for i,q in enumerate(prova["questoes"]):
-            user = prova["respostas"][i]
-            if user == q["correta"]:
-                pontos += 1
-            detalhes += f"Q{i+1}: {letras[user]} | Correta: {letras[q['correta']]}\n"
-
-        status = "✅ APROVADO" if pontos >= MIN_PONTOS else "❌ REPROVADO"
-
-        await usuario.send(embed=discord.Embed(
-            title="Resultado da Prova",
-            description=f"{pontos}/{NUM_PERGUNTAS} — {status}",
-            color=0x2ECC71 if pontos>=MIN_PONTOS else 0xE74C3C
-        ))
+        await user.send(embed=discord.Embed(title="Resultado", description=f"{pontos}/{NUM_PERGUNTAS}\n{status}", color=0x2ecc71 if aprovado else 0xe74c3c))
 
         if self.result_channel:
-            ch = self.bot.get_channel(self.result_channel)
-            if ch:
-                await ch.send(embed=discord.Embed(
-                    title="Resultado Oficial",
-                    description=f"{usuario.mention} — {pontos}/{NUM_PERGUNTAS} — {status}",
-                    color=0x2ECC71 if pontos>=MIN_PONTOS else 0xE74C3C
-                ))
+            c = self.bot.get_channel(self.result_channel)
+            if c:
+                await c.send(embed=discord.Embed(description=f"{user.mention} — {status}", color=0x2ecc71 if aprovado else 0xe74c3c))
 
         if self.log_channel:
-            log = self.bot.get_channel(self.log_channel)
-            if log:
-                await log.send(embed=discord.Embed(
-                    title=f"LOG — {usuario}",
-                    description=detalhes,
-                    color=0x95A5A6
-                ))
+            c = self.bot.get_channel(self.log_channel)
+            if c:
+                await c.send(embed=discord.Embed(title=f"Log {user}", description=f"Pontuação: {pontos}", color=0x7f8c8d))
 
         self.dados["provas"].pop(uid)
         salvar(self.dados)
 
-    # ---------------- LIMPEZA ----------------
     @tasks.loop(hours=24)
     async def _limpar(self):
         agora = datetime.utcnow()
-        alterou = False
+        for k,v in list(self.dados["tentativas"].items()):
+            dt = datetime.fromisoformat(v)
+            if agora - dt > timedelta(days=1):
+                self.dados["tentativas"].pop(k)
+        salvar(self.dados)
 
-        for uid, t in list(self.dados["tentativas"].items()):
-            if agora - datetime.fromisoformat(t) > timedelta(days=30):
-                del self.dados["tentativas"][uid]
-                alterou = True
 
-        if alterou:
-            salvar(self.dados)
+async def setup(bot):
+    await bot.add_cog(Edital(bot))
+    print("✅ Edital carregado corretamente")
