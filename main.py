@@ -1,174 +1,141 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import aiosqlite
-import os
 from datetime import datetime
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-DB = "prf.db"
-
-PATENTES = [
-    "Diretor geral","executivo","de operações","de inteligência",
-    "superintendente executivo","superintendente regional",
-    "delegado geral","executivo","inspetor chefe","inspetor",
-    "supervisor","agente 1 classe","agente 2 classe","agente 3 classe","aluno"
-]
-
-intents = discord.Intents.default()
-intents.members = True
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --------------------------------------------------------
+TOKEN = "COLOQUE_SEU_TOKEN_AQUI"
 
-async def iniciar_db():
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS membros(
-            id INTEGER PRIMARY KEY,
-            nome_rp TEXT,
-            patente TEXT,
-            status TEXT,
-            advertencias INTEGER DEFAULT 0
-        )
-        """)
-        await db.commit()
+# HIERARQUIA OFICIAL PRF
+HIERARQUIA = [
+    "DIRETOR GERAL",
+    "DIRETOR EXECUTIVO",
+    "DIRETOR DE OPERAÇÕES",
+    "DIRETOR DE INTELIGÊNCIA",
+    "SUPERINTENDENTE EXECUTIVO",
+    "SUPERINTENDENTE REGIONAL",
+    "DELEGADO GERAL",
+    "DELEGADO EXECUTIVO",
+    "CHEFE DE SETOR",
+    "CHEFE DE NÚCLEO",
+    "CHEFE DE EQUIPE",
+    "INSPETOR CHEFE",
+    "INSPETOR",
+    "SUPERVISOR",
+    "AGENTE – 1ª CLASSE",
+    "AGENTE – 2ª CLASSE",
+    "AGENTE – 3ª CLASSE",
+    "ALUNO FEDERAL",
+    "CIVIL"
+]
+
+def get_cargo(membro):
+    for role in membro.roles:
+        if role.name in HIERARQUIA:
+            return role.name
+    return "CIVIL"
+
+def pode_promover(autor, alvo):
+    return HIERARQUIA.index(get_cargo(autor)) < HIERARQUIA.index(get_cargo(alvo))
+
+async def setar_cargo(membro, novo_cargo):
+    for role in membro.roles:
+        if role.name in HIERARQUIA:
+            await membro.remove_roles(role)
+
+    role = discord.utils.get(membro.guild.roles, name=novo_cargo)
+    if role:
+        await membro.add_roles(role)
+
+def embed_padrao(titulo, desc, cor=0x0C7BDC):
+    emb = discord.Embed(title=titulo, description=desc, color=cor)
+    emb.set_footer(text="Polícia Rodoviária Federal • Sistema Oficial")
+    return emb
 
 @bot.event
 async def on_ready():
-    await iniciar_db()
     await bot.tree.sync()
-    print("Bot PRF ONLINE")
+    print("✅ BOT PRF ONLINE")
 
-# --------------------------------------------------------
-# UTILIDADES DE CARGO
-
-async def remover_patentes(member):
-    for role in member.roles:
-        if role.name in PATENTES or role.name == "civil":
-            await member.remove_roles(role)
-
-async def setar_patente(member, cargo_nome):
-    role = discord.utils.get(member.guild.roles, name=cargo_nome)
-    if not role:
-        raise Exception(f"Cargo '{cargo_nome}' não existe.")
-    await member.add_roles(role)
-
-# --------------------------------------------------------
-# PERMISSÃO HIERÁRQUICA
-
-def patente_index(nome):
-    try:
-        return PATENTES.index(nome)
-    except:
-        return 999
-
-async def tem_permissao(member, patente_min):
-    for role in member.roles:
-        if role.name in PATENTES:
-            return patente_index(role.name) <= patente_index(patente_min)
-    return member.guild_permissions.administrator
-
-# --------------------------------------------------------
 # REGISTRAR
+@bot.tree.command(name="registrar")
+@app_commands.describe(membro="Usuário a registrar")
+async def registrar(inter: discord.Interaction, membro: discord.Member):
+    await setar_cargo(membro, "ALUNO FEDERAL")
+    emb = embed_padrao("📋 REGISTRO EFETUADO", f"{membro.mention} agora é **ALUNO FEDERAL**.")
+    await inter.response.send_message(embed=emb)
 
-@bot.tree.command()
-async def registrar(interaction: discord.Interaction, usuario: discord.Member, nome_rp: str, patente: str):
-    if not await tem_permissao(interaction.user, "supervisor"):
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
-
-    if patente not in PATENTES:
-        return await interaction.response.send_message("❌ Patente inválida.", ephemeral=True)
-
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("INSERT OR REPLACE INTO membros VALUES (?,?,?,?,0)", 
-                         (usuario.id, nome_rp, patente, "ativo"))
-        await db.commit()
-
-    await remover_patentes(usuario)
-    await setar_patente(usuario, patente)
-
-    await usuario.send(f"✅ Você foi registrado na PRF.\nPatente: {patente}")
-
-    await interaction.response.send_message(f"✔ {usuario.mention} registrado como {patente}.")
-
-
-# --------------------------------------------------------
 # PROMOVER
+@bot.tree.command(name="promover")
+@app_commands.describe(membro="Usuário", cargo="Novo cargo")
+async def promover(inter: discord.Interaction, membro: discord.Member, cargo: str):
+    cargo = cargo.upper()
 
-@bot.tree.command()
-async def promover(interaction: discord.Interaction, usuario: discord.Member, nova_patente: str):
-    if not await tem_permissao(interaction.user, "inspetor"):
-        return await interaction.response.send_message("❌ Sem permissão.")
+    if cargo not in HIERARQUIA:
+        await inter.response.send_message("❌ Cargo inválido.")
+        return
 
-    if nova_patente not in PATENTES:
-        return await interaction.response.send_message("Patente inválida.")
+    if not pode_promover(inter.user, membro):
+        await inter.response.send_message("❌ Você não pode promover alguém de patente igual ou superior.")
+        return
 
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("UPDATE membros SET patente=? WHERE id=?", (nova_patente, usuario.id))
-        await db.commit()
+    await setar_cargo(membro, cargo)
 
-    await remover_patentes(usuario)
-    await setar_patente(usuario, nova_patente)
+    emb = embed_padrao(
+        "📈 PROMOÇÃO NA PRF",
+        f"**Membro:** {membro.mention}\n"
+        f"**Novo cargo:** {cargo}\n"
+        f"**Autoridade:** {inter.user.mention}\n"
+        f"**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    await inter.response.send_message(embed=emb)
 
-    await usuario.send(f"📈 Você foi PROMOVIDO para {nova_patente}.")
-    await interaction.response.send_message(f"✅ {usuario.mention} promovido.")
-
-
-# --------------------------------------------------------
 # REBAIXAR
+@bot.tree.command(name="rebaixar")
+@app_commands.describe(membro="Usuário", cargo="Novo cargo", motivo="Motivo")
+async def rebaixar(inter: discord.Interaction, membro: discord.Member, cargo: str, motivo: str):
+    cargo = cargo.upper()
 
-@bot.tree.command()
-async def rebaixar(interaction: discord.Interaction, usuario: discord.Member, nova_patente: str, motivo: str):
-    if not await tem_permissao(interaction.user, "inspetor"):
-        return await interaction.response.send_message("Sem permissão.")
+    await setar_cargo(membro, cargo)
 
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("UPDATE membros SET patente=? WHERE id=?", (nova_patente, usuario.id))
-        await db.commit()
+    emb = embed_padrao(
+        "📉 REBAIXAMENTO",
+        f"**Membro:** {membro.mention}\n"
+        f"**Novo cargo:** {cargo}\n"
+        f"**Motivo:** {motivo}\n"
+        f"**Autoridade:** {inter.user.mention}",
+        cor=0xE67E22
+    )
+    await inter.response.send_message(embed=emb)
 
-    await remover_patentes(usuario)
-    await setar_patente(usuario, nova_patente)
-
-    await usuario.send(f"📉 Você foi REBAIXADO para {nova_patente}.\nMotivo: {motivo}")
-    await interaction.response.send_message("Rebaixamento aplicado.")
-
-
-# --------------------------------------------------------
-# EXONERAR
-
-@bot.tree.command()
-async def exonerar(interaction: discord.Interaction, usuario: discord.Member, motivo: str):
-    if not await tem_permissao(interaction.user, "inspetor"):
-        return await interaction.response.send_message("Sem permissão.")
-
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("UPDATE membros SET status='exonerado' WHERE id=?", (usuario.id,))
-        await db.commit()
-
-    await remover_patentes(usuario)
-    await setar_patente(usuario, "civil")
-
-    await usuario.send(f"⛔ Você foi EXONERADO da PRF.\nMotivo: {motivo}")
-    await interaction.response.send_message("Exoneração concluída.")
-
-
-# --------------------------------------------------------
 # ADVERTIR
+@bot.tree.command(name="advertir")
+@app_commands.describe(membro="Usuário", motivo="Motivo")
+async def advertir(inter: discord.Interaction, membro: discord.Member, motivo: str):
+    emb = embed_padrao(
+        "⚠ ADVERTÊNCIA DISCIPLINAR",
+        f"**Membro:** {membro.mention}\n"
+        f"**Motivo:** {motivo}\n"
+        f"**Autoridade:** {inter.user.mention}",
+        cor=0xF1C40F
+    )
+    await inter.response.send_message(embed=emb)
 
-@bot.tree.command()
-async def advertir(interaction: discord.Interaction, usuario: discord.Member, motivo: str):
-    if not await tem_permissao(interaction.user, "supervisor"):
-        return await interaction.response.send_message("Sem permissão.")
+# EXONERAR
+@bot.tree.command(name="exonerar")
+@app_commands.describe(membro="Usuário", motivo="Motivo")
+async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: str):
+    await setar_cargo(membro, "CIVIL")
 
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("UPDATE membros SET advertencias = advertencias + 1 WHERE id=?", (usuario.id,))
-        await db.commit()
-
-    await usuario.send(f"⚠️ ADVERTÊNCIA OFICIAL\nMotivo: {motivo}")
-    await interaction.response.send_message("Advertência aplicada.")
-
-# --------------------------------------------------------
+    emb = embed_padrao(
+        "🚨 EXONERAÇÃO",
+        f"**Membro:** {membro.mention}\n"
+        f"**Motivo:** {motivo}\n"
+        f"**Autoridade:** {inter.user.mention}",
+        cor=0xC0392B
+    )
+    await inter.response.send_message(embed=emb)
 
 bot.run(TOKEN)
-  
