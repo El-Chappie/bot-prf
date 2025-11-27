@@ -3,7 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 import os
 
-GUILD_ID = 1443387233062354954
+# ==========================
+# CONFIGURAÇÕES
+# ==========================
+GUILD_ID = 1443387233062354954  # ID DO SEU SERVIDOR
 
 intents = discord.Intents.default()
 intents.members = True
@@ -14,51 +17,62 @@ config = {
     "log_channel": None
 }
 
+# ==========================
+# EVENT
+# ==========================
 @bot.event
 async def on_ready():
-    print("🔄 SINCRONIZANDO COMANDOS...")
+    print("➡ BOT INICIADO")
     guild = discord.Object(id=GUILD_ID)
 
-    try:
-        bot.tree.clear_commands(guild=guild)
-        await bot.tree.sync(guild=guild)
-        print("✅ COMANDOS ANTIGOS LIMPOS")
-    except Exception as e:
-        print("⚠ ERRO AO LIMPAR:", e)
+    print("🔄 APAGANDO COMANDOS...")
+    bot.tree.clear_commands(guild=guild)
 
-    try:
-        synced = await bot.tree.sync(guild=guild)
-        print(f"✅ COMANDOS REGISTRADOS: {len(synced)}")
-    except Exception as e:
-        print("❌ ERRO AO REGISTRAR:", e)
+    print("🔁 RECRIANDO COMANDOS...")
+    synced = await bot.tree.sync(guild=guild)
 
-    print("✅ BOT ONLINE")
+    print(f"✅ COMANDOS REGISTRADOS: {len(synced)}")
+    print(f"✅ BOT ONLINE COMO: {bot.user}")
 
-
+# ==========================
+# VERIFICADOR ADMIN
+# ==========================
 def is_admin(interaction: discord.Interaction):
     return any(role.id in config["admin_roles"] for role in interaction.user.roles)
 
-# CONFIGURAR CARGO ADMIN
-@bot.tree.command(name="config-admin", description="Configurar cargo administrador")
-@app_commands.check(is_admin)
+# ==========================
+# CONFIG ADMIN
+# ==========================
+@bot.tree.command(name="config-admin", description="Define cargo administrador")
 async def config_admin(interaction: discord.Interaction, cargo: discord.Role):
     config["admin_roles"].append(cargo.id)
-    await interaction.response.send_message(f"✅ {cargo.name} agora é cargo administrador.", ephemeral=True)
+    await interaction.response.send_message(
+        f"✅ Cargo {cargo.mention} agora tem permissão administrativa.",
+        ephemeral=True
+    )
 
-# CONFIGURAR CANAL LOG
-@bot.tree.command(name="config-log", description="Configurar canal de registros PRF")
-@app_commands.check(is_admin)
+# ==========================
+# CONFIG CANAL LOG
+# ==========================
+@bot.tree.command(name="config-log", description="Define canal de registros PRF")
 async def config_log(interaction: discord.Interaction, canal: discord.TextChannel):
     config["log_channel"] = canal.id
-    await interaction.response.send_message(f"✅ Canal setado: {canal.mention}", ephemeral=True)
+    await interaction.response.send_message(
+        f"✅ Canal de comunicados definido: {canal.mention}",
+        ephemeral=True
+    )
 
+# ==========================
 # REGISTRAR MEMBRO
-@bot.tree.command(name="registrar", description="Registrar membro na PRF")
-@app_commands.check(is_admin)
+# ==========================
+@bot.tree.command(name="registrar", description="Registrar membro")
 async def registrar(interaction: discord.Interaction, membro: discord.Member, cargo: discord.Role):
+    if not is_admin(interaction):
+        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+
     await membro.add_roles(cargo)
 
-    msg = f"✅ {membro.mention} registrado como **{cargo.name}**."
+    msg = f"✅ {membro.mention} registrado como **{cargo.name}**"
 
     await interaction.response.send_message(msg)
 
@@ -68,44 +82,55 @@ async def registrar(interaction: discord.Interaction, membro: discord.Member, ca
         pass
 
     if config["log_channel"]:
-        canal = bot.get_channel(config["log_channel"])
-        await canal.send(msg)
-
-# PROMOVER
-@bot.tree.command(name="promover", description="Promover membro")
-@app_commands.check(is_admin)
-async def promover(interaction: discord.Interaction, membro: discord.Member, novo_cargo: discord.Role):
-    await membro.add_roles(novo_cargo)
-
-    msg = f"📈 {membro.mention} promovido para **{novo_cargo.name}**."
-
-    await interaction.response.send_message(msg)
-
-    if config["log_channel"]:
         await bot.get_channel(config["log_channel"]).send(msg)
 
-# REBAIXAR
-@bot.tree.command(name="rebaixar", description="Rebaixar membro")
-@app_commands.check(is_admin)
-async def rebaixar(interaction: discord.Interaction, membro: discord.Member, cargo: discord.Role):
+# ==========================
+# PROMOVER
+# ==========================
+@bot.tree.command(name="promover", description="Promover membro")
+async def promover(interaction: discord.Interaction, membro: discord.Member, cargo: discord.Role):
+    if not is_admin(interaction):
+        return await interaction.response.send_message("❌ Permissão negada.", ephemeral=True)
+
     await membro.add_roles(cargo)
 
-    msg = f"📉 {membro.mention} rebaixado para **{cargo.name}**."
+    msg = f"📈 {membro.mention} promovido para **{cargo.name}**"
 
     await interaction.response.send_message(msg)
 
     if config["log_channel"]:
         await bot.get_channel(config["log_channel"]).send(msg)
 
-# DEMITIR
-@bot.tree.command(name="exonerar", description="Expulsar da PRF")
-@app_commands.check(is_admin)
+# ==========================
+# REBAIXAR
+# ==========================
+@bot.tree.command(name="rebaixar", description="Rebaixar membro")
+async def rebaixar(interaction: discord.Interaction, membro: discord.Member, cargo: discord.Role):
+    if not is_admin(interaction):
+        return await interaction.response.send_message("❌ Sem autorização.", ephemeral=True)
+
+    await membro.add_roles(cargo)
+
+    msg = f"📉 {membro.mention} rebaixado para **{cargo.name}**"
+
+    await interaction.response.send_message(msg)
+
+    if config["log_channel"]:
+        await bot.get_channel(config["log_channel"]).send(msg)
+
+# ==========================
+# EXONERAR
+# ==========================
+@bot.tree.command(name="exonerar", description="Remover membro da PRF")
 async def exonerar(interaction: discord.Interaction, membro: discord.Member, motivo: str):
+    if not is_admin(interaction):
+        return await interaction.response.send_message("❌ Sem autorização.", ephemeral=True)
+
     for role in membro.roles:
         if role.name != "@everyone":
             await membro.remove_roles(role)
 
-    msg = f"❌ {membro.mention} foi exonerado.\nMotivo: {motivo}"
+    msg = f"❌ {membro.mention} exonerado.\nMotivo: {motivo}"
 
     await interaction.response.send_message(msg)
 
@@ -117,10 +142,14 @@ async def exonerar(interaction: discord.Interaction, membro: discord.Member, mot
     if config["log_channel"]:
         await bot.get_channel(config["log_channel"]).send(msg)
 
+# ==========================
 # ADVERTÊNCIA
-@bot.tree.command(name="punir", description="Aplicar advertência")
-@app_commands.check(is_admin)
+# ==========================
+@bot.tree.command(name="punir", description="Aplicar punição")
 async def punir(interaction: discord.Interaction, membro: discord.Member, motivo: str):
+    if not is_admin(interaction):
+        return await interaction.response.send_message("❌ Sem autorização.", ephemeral=True)
+
     msg = f"⚠ {membro.mention} advertido.\nMotivo: {motivo}"
 
     await interaction.response.send_message(msg)
@@ -131,7 +160,5 @@ async def punir(interaction: discord.Interaction, membro: discord.Member, motivo
         pass
 
     if config["log_channel"]:
-        await bot.get_channel(config["log_channel"]).send(msg)
-
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+        await bot.get_channel(c_
+        
