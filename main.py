@@ -1,4 +1,4 @@
-# main.py — BOT PRF (incorporar @user @role cargo nome)
+# main.py — BOT PRF (incorporar @user @role cargo nome) - com verificação EFETIVO
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -187,6 +187,10 @@ async def promover(inter: discord.Interaction, membro: discord.Member, role: dis
     guild = inter.guild
     prf_role = guild.get_role(CARGO_PRF_ID)
 
+    # Verifica se é servidor registrado (possui PRF EFETIVO)
+    if not prf_role or prf_role not in membro.roles:
+        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+
     # Remove roles PRF (mantém apenas efetivo se quiser), aqui removemos todos exceto default and prf
     try:
         remove_list = [r for r in membro.roles if r != guild.default_role and r.id != CARGO_PRF_ID]
@@ -238,6 +242,11 @@ async def rebaixar(inter: discord.Interaction, membro: discord.Member, role: dis
         return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
 
     guild = inter.guild
+    prf_role = guild.get_role(CARGO_PRF_ID)
+
+    # Verifica se é servidor registrado (possui PRF EFETIVO)
+    if not prf_role or prf_role not in membro.roles:
+        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
 
     try:
         remove_list = [r for r in membro.roles if r != guild.default_role and r.id != CARGO_PRF_ID]
@@ -285,6 +294,13 @@ async def advertir(inter: discord.Interaction, membro: discord.Member, motivo: s
     if not eh_admin(inter.user):
         return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
 
+    guild = inter.guild
+    prf_role = guild.get_role(CARGO_PRF_ID)
+
+    # Verifica se é servidor registrado (possui PRF EFETIVO)
+    if not prf_role or prf_role not in membro.roles:
+        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+
     uid = str(membro.id)
     lista = advertencias.get(uid, [])
     lista.append({"motivo": motivo, "autor": inter.user.id, "data": datetime.now().strftime("%d/%m/%Y %H:%M")})
@@ -299,7 +315,6 @@ async def advertir(inter: discord.Interaction, membro: discord.Member, motivo: s
         advertencias.pop(uid, None)
         salvar_adv()
         # executa exoneração
-        # reutilizamos o comando exonerar: chamando diretamente a função
         await exonerar(inter, membro, motivo_ex)
         return
 
@@ -332,6 +347,12 @@ async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: s
         return await inter.response.send_message("❌ Sem permissão.", ephemeral=True)
 
     guild = inter.guild
+    prf_role = guild.get_role(CARGO_PRF_ID)
+
+    # Verifica se é servidor registrado (possui PRF EFETIVO)
+    if not prf_role or prf_role not in membro.roles:
+        return await inter.response.send_message("❌ Usuário não é um servidor registrado (não possui cargo EFETIVO).", ephemeral=True)
+
     civil_role = guild.get_role(CARGO_CIVIL_ID)
     if not civil_role:
         return await inter.response.send_message("❌ Role CIVIL não encontrado no servidor.", ephemeral=True)
