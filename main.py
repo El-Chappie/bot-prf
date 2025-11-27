@@ -8,9 +8,15 @@ import os, json, traceback
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-from edital import EditalCog
+edital_cog = EditalCog(bot)
+bot.add_cog(edital_cog)
 
-bot.add_cog(EditalCog(bot))
+# Depois configure com seus IDs reais
+edital_cog.configurar(
+    diretor_roles=[1443387926196260965],
+    canal_logs_id=1443619642496258260,
+    canal_anuncios_id=1443388062171271339
+)
 
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
@@ -401,4 +407,5 @@ async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: s
 # RODA O BOT
 # ----------------------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
+
 
