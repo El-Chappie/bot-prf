@@ -6,9 +6,19 @@ from datetime import datetime
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-TOKEN = "COLOQUE_SEU_TOKEN_AQUI"
+# === CARGOS AUTORIZADOS (NOME EXATO COMO NO DISCORD) ===
+AUTORIDADES = [
+    "DIRETOR GERAL",
+    "DIRETOR EXECUTIVO",
+    "DIRETOR DE OPERAÇÕES",
+    "DIRETOR DE INTELIGÊNCIA",
+    "SUPERINTENDENTE EXECUTIVO",
+    "SUPERINTENDENTE REGIONAL",
+    "DELEGADO GERAL",
+    "DELEGADO EXECUTIVO"
+]
 
-# HIERARQUIA OFICIAL PRF
+# === TODOS OS CARGOS DA PRF (INCLUINDO CIVIL) ===
 HIERARQUIA = [
     "DIRETOR GERAL",
     "DIRETOR EXECUTIVO",
@@ -31,27 +41,27 @@ HIERARQUIA = [
     "CIVIL"
 ]
 
-def get_cargo(membro):
+def eh_autoridade(membro: discord.Member):
+    return any(role.name.upper() in AUTORIDADES for role in membro.roles)
+
+def cargo_prf(membro: discord.Member):
     for role in membro.roles:
         if role.name in HIERARQUIA:
-            return role.name
-    return "CIVIL"
+            return role
+    return None
 
-def pode_promover(autor, alvo):
-    return HIERARQUIA.index(get_cargo(autor)) < HIERARQUIA.index(get_cargo(alvo))
-
-async def setar_cargo(membro, novo_cargo):
+async def setar_cargo(membro: discord.Member, novo_cargo: discord.Role):
+    # Remove cargos PRF antigos
     for role in membro.roles:
         if role.name in HIERARQUIA:
             await membro.remove_roles(role)
 
-    role = discord.utils.get(membro.guild.roles, name=novo_cargo)
-    if role:
-        await membro.add_roles(role)
+    # Adiciona novo cargo
+    await membro.add_roles(novo_cargo)
 
-def embed_padrao(titulo, desc, cor=0x0C7BDC):
+def embed_padrao(titulo, desc, cor):
     emb = discord.Embed(title=titulo, description=desc, color=cor)
-    emb.set_footer(text="Polícia Rodoviária Federal • Sistema Oficial")
+    emb.set_footer(text="POLÍCIA RODOVIÁRIA FEDERAL • SISTEMA OFICIAL")
     return emb
 
 @bot.event
@@ -59,83 +69,120 @@ async def on_ready():
     await bot.tree.sync()
     print("✅ BOT PRF ONLINE")
 
-# REGISTRAR
-@bot.tree.command(name="registrar")
-@app_commands.describe(membro="Usuário a registrar")
-async def registrar(inter: discord.Interaction, membro: discord.Member):
-    await setar_cargo(membro, "ALUNO FEDERAL")
-    emb = embed_padrao("📋 REGISTRO EFETUADO", f"{membro.mention} agora é **ALUNO FEDERAL**.")
-    await inter.response.send_message(embed=emb)
+# ========= REGISTRO =========
+@bot.tree.command(name="registrar", description="Registrar membro na corporação")
+@app_commands.describe(membro="Usuário", cargo="Cargo do servidor")
+async def registrar(inter: discord.Interaction, membro: discord.Member, cargo: discord.Role):
 
-# PROMOVER
-@bot.tree.command(name="promover")
-@app_commands.describe(membro="Usuário", cargo="Novo cargo")
-async def promover(inter: discord.Interaction, membro: discord.Member, cargo: str):
-    cargo = cargo.upper()
-
-    if cargo not in HIERARQUIA:
-        await inter.response.send_message("❌ Cargo inválido.")
+    if not eh_autoridade(inter.user):
+        await inter.response.send_message("❌ Você não tem autorização para registrar.", ephemeral=True)
         return
 
-    if not pode_promover(inter.user, membro):
-        await inter.response.send_message("❌ Você não pode promover alguém de patente igual ou superior.")
+    if cargo.name not in HIERARQUIA:
+        await inter.response.send_message("❌ Este cargo não é da PRF.", ephemeral=True)
         return
 
     await setar_cargo(membro, cargo)
 
-    emb = embed_padrao(
-        "📈 PROMOÇÃO NA PRF",
+    emb = embed_padrao("📋 REGISTRO EFETUADO",
         f"**Membro:** {membro.mention}\n"
-        f"**Novo cargo:** {cargo}\n"
-        f"**Autoridade:** {inter.user.mention}\n"
-        f"**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        f"**Cargo atribuído:** {cargo.mention}\n"
+        f"**Registrado por:** {inter.user.mention}\n"
+        f"**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        0x3498DB
     )
+
     await inter.response.send_message(embed=emb)
 
-# REBAIXAR
-@bot.tree.command(name="rebaixar")
-@app_commands.describe(membro="Usuário", cargo="Novo cargo", motivo="Motivo")
-async def rebaixar(inter: discord.Interaction, membro: discord.Member, cargo: str, motivo: str):
-    cargo = cargo.upper()
+# ========= PROMOVER =========
+@bot.tree.command(name="promover", description="Promover membro")
+@app_commands.describe(membro="Usuário", cargo="Novo cargo")
+async def promover(inter: discord.Interaction, membro: discord.Member, cargo: discord.Role):
+
+    if not eh_autoridade(inter.user):
+        await inter.response.send_message("❌ Você não tem autorização para promover.", ephemeral=True)
+        return
+
+    if cargo.name not in HIERARQUIA:
+        await inter.response.send_message("❌ Cargo inválido.", ephemeral=True)
+        return
 
     await setar_cargo(membro, cargo)
 
-    emb = embed_padrao(
-        "📉 REBAIXAMENTO",
+    emb = embed_padrao("📈 PROMOÇÃO",
         f"**Membro:** {membro.mention}\n"
-        f"**Novo cargo:** {cargo}\n"
+        f"**Novo cargo:** {cargo.mention}\n"
+        f"**Autoridade:** {inter.user.mention}\n"
+        f"**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        0x2ECC71
+    )
+
+    await inter.response.send_message(embed=emb)
+
+# ========= REBAIXAR =========
+@bot.tree.command(name="rebaixar", description="Rebaixar membro")
+@app_commands.describe(membro="Usuário", cargo="Novo cargo", motivo="Motivo")
+async def rebaixar(inter: discord.Interaction, membro: discord.Member, cargo: discord.Role, motivo: str):
+
+    if not eh_autoridade(inter.user):
+        await inter.response.send_message("❌ Você não tem autorização para rebaixar.", ephemeral=True)
+        return
+
+    await setar_cargo(membro, cargo)
+
+    emb = embed_padrao("📉 REBAIXAMENTO",
+        f"**Membro:** {membro.mention}\n"
+        f"**Novo cargo:** {cargo.mention}\n"
         f"**Motivo:** {motivo}\n"
         f"**Autoridade:** {inter.user.mention}",
-        cor=0xE67E22
+        0xE67E22
     )
+
     await inter.response.send_message(embed=emb)
 
-# ADVERTIR
-@bot.tree.command(name="advertir")
+# ========= ADVERTÊNCIA =========
+@bot.tree.command(name="advertir", description="Advertir membro")
 @app_commands.describe(membro="Usuário", motivo="Motivo")
 async def advertir(inter: discord.Interaction, membro: discord.Member, motivo: str):
-    emb = embed_padrao(
-        "⚠ ADVERTÊNCIA DISCIPLINAR",
+
+    if not eh_autoridade(inter.user):
+        await inter.response.send_message("❌ Você não tem autorização.", ephemeral=True)
+        return
+
+    emb = embed_padrao("⚠ ADVERTÊNCIA DISCIPLINAR",
         f"**Membro:** {membro.mention}\n"
         f"**Motivo:** {motivo}\n"
         f"**Autoridade:** {inter.user.mention}",
-        cor=0xF1C40F
+        0xF1C40F
     )
+
     await inter.response.send_message(embed=emb)
 
-# EXONERAR
-@bot.tree.command(name="exonerar")
+# ========= EXONERAR =========
+@bot.tree.command(name="exonerar", description="Exonerar membro")
 @app_commands.describe(membro="Usuário", motivo="Motivo")
 async def exonerar(inter: discord.Interaction, membro: discord.Member, motivo: str):
-    await setar_cargo(membro, "CIVIL")
 
-    emb = embed_padrao(
-        "🚨 EXONERAÇÃO",
+    if not eh_autoridade(inter.user):
+        await inter.response.send_message("❌ Você não tem autorização para exonerar.", ephemeral=True)
+        return
+
+    cargo_civil = discord.utils.get(membro.guild.roles, name="CIVIL")
+    if not cargo_civil:
+        await inter.response.send_message("❌ Cargo CIVIL não existe.", ephemeral=True)
+        return
+
+    await setar_cargo(membro, cargo_civil)
+
+    emb = embed_padrao("🚨 EXONERAÇÃO",
         f"**Membro:** {membro.mention}\n"
         f"**Motivo:** {motivo}\n"
         f"**Autoridade:** {inter.user.mention}",
-        cor=0xC0392B
+        0xC0392B
     )
+
     await inter.response.send_message(embed=emb)
 
-bot.run(TOKEN)
+# ========= INICIALIZA =========
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
