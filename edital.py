@@ -1,4 +1,3 @@
-# edital.py
 import discord
 from discord.ext import commands, tasks
 import json
@@ -40,7 +39,6 @@ def salvar(dados):
     with open(ARQ_PROVA, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
 
-
 class Edital(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -74,7 +72,6 @@ class Edital(commands.Cog):
 
     @commands.hybrid_command(name="enviarprova")
     async def enviarprova(self, ctx, usuario: discord.Member):
-
         if not (ctx.author.guild_permissions.administrator or any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles)):
             await ctx.reply(embed=discord.Embed(title="❌ Sem permissão", description="Acesso restrito.", color=0xe74c3c), ephemeral=True)
             return
