@@ -4,9 +4,9 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 
-# Configurações
-DIRETOR_ROLE_IDS = [1443387915689398395, 1443387916633247766]  # Coloque os IDs reais aqui
-CATEGORIA_PROVAS_ID = 1443387998153605262  # ID da categoria onde criar os canais privados (ou None para criar no topo)
+# CONFIGURAÇÕES - ajuste esses valores
+DIRETOR_ROLE_IDS = [1443387915689398395, 1443387916633247766]  # IDs dos cargos de diretor
+CATEGORIA_PROVAS_ID = 1443387998153605262  # ID da categoria para canais de prova (ou None)
 NUM_PERGUNTAS = 10
 MIN_PONTOS = 6
 TEMPO_LIMITE = 600  # 10 minutos em segundos
@@ -100,10 +100,24 @@ class ProvaView(discord.ui.View):
         except:
             pass
 
-        # Log no canal de logs
-        canal_log = self.cog.bot.get_channel(self.cog.canal_log_id)
+        # Envia resultado no canal configurado
+        canal_resultados = self.cog.canal_resultados_id
+        if canal_resultados:
+            canal = self.cog.bot.get_channel(canal_resultados)
+            if canal:
+                embed_result = discord.Embed(
+                    title=f"Resultado da prova - {self.user}",
+                    description=f"Pontuação: {pontos}/{NUM_PERGUNTAS}\nStatus: {status}",
+                    color=discord.Color.green() if aprovado else discord.Color.red()
+                )
+                await canal.send(embed=embed_result)
+
+        # Log no canal de logs, se configurado
+        canal_log = self.cog.canal_log_id
         if canal_log:
-            await canal_log.send(embed=discord.Embed(title=f"Log Prova {self.user}", description=f"Pontuação: {pontos}\nStatus: {status}", color=discord.Color.greyple()))
+            canal_l = self.cog.bot.get_channel(canal_log)
+            if canal_l:
+                await canal_l.send(embed=discord.Embed(title=f"Log Prova {self.user}", description=f"Pontuação: {pontos}\nStatus: {status}", color=discord.Color.greyple()))
 
         # Fecha o canal privado após 1 min
         await asyncio.sleep(60)
@@ -146,24 +160,20 @@ class IniciarProvaButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         user = interaction.user
 
-        # Verifica se é membro (não bot) e guild
         if not interaction.guild:
             await interaction.response.send_message("Este comando só pode ser usado dentro do servidor.", ephemeral=True)
             return
 
-        # Verifica se usuário já está fazendo prova
         if user.id in self.cog.provas_ativas:
             await interaction.response.send_message("Você já está fazendo uma prova.", ephemeral=True)
             return
 
         guild = interaction.guild
 
-        # Cria canal privado para a prova
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
         }
-        # Permite acesso para cargos diretores
         for role_id in DIRETOR_ROLE_IDS:
             role = guild.get_role(role_id)
             if role:
@@ -174,12 +184,34 @@ class IniciarProvaButton(discord.ui.Button):
 
         channel = await guild.create_text_channel(nome_canal, overwrites=overwrites, category=category, reason="Canal privado para prova")
 
-        # Inicia prova no canal
+        # MOVE usuário para canal de voz com o mesmo nome (se quiser, pode descomentar abaixo)
+        # Se o usuário estiver em canal de voz, tenta mover ele para um canal de voz privado para prova (criado aqui)
+        # Para isso, precisa criar canal de voz também. Comente se não quiser.
+
+        voz_canal = None
+        try:
+            if user.voice and user.voice.channel:
+                # Criar canal de voz privado
+                overwrites_voice = {
+                    guild.default_role: discord.PermissionOverwrite(connect=False),
+                    user: discord.PermissionOverwrite(connect=True, speak=True)
+                }
+                # Permitir diretores no canal de voz
+                for role_id in DIRETOR_ROLE_IDS:
+                    role = guild.get_role(role_id)
+                    if role:
+                        overwrites_voice[role] = discord.PermissionOverwrite(connect=True, speak=True)
+
+                voz_canal = await guild.create_voice_channel(f"Prova VC - {user.name}", overwrites=overwrites_voice, category=category, reason="Canal de voz privado para prova")
+                await user.move_to(voz_canal)
+        except Exception as e:
+            print(f"Erro ao mover usuário para canal de voz: {e}")
+
         prova_view = ProvaView(self.cog.bot, channel, user, self.cog)
         self.cog.provas_ativas[user.id] = prova_view
         await prova_view.start()
 
-        await interaction.response.send_message(f"Canal privado criado: {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"Canal privado criado: {channel.mention}" + (f" e canal de voz criado: {voz_canal.mention}" if voz_canal else ""), ephemeral=True)
 
 
 class Edital(commands.Cog):
@@ -188,6 +220,7 @@ class Edital(commands.Cog):
         self.provas_ativas = {}  # user_id : ProvaView
         self.categoria_provas_id = CATEGORIA_PROVAS_ID
         self.canal_log_id = None
+        self.canal_resultados_id = None
 
     @commands.hybrid_command(name="setcanallog")
     @commands.has_permissions(administrator=True)
@@ -195,15 +228,23 @@ class Edital(commands.Cog):
         self.canal_log_id = canal.id
         await ctx.reply(f"Canal de logs definido: {canal.mention}", ephemeral=True)
 
-    # Comando APENAS para diretores enviarem embed pública com botão
+    @commands.hybrid_command(name="setcanalresultado")
+    @commands.has_permissions(administrator=True)
+    async def set_canal_resultado(self, ctx, canal: discord.TextChannel):
+        self.canal_resultados_id = canal.id
+        await ctx.reply(f"Canal de resultados definido: {canal.mention}", ephemeral=True)
+
     @commands.hybrid_command(name="lniclarprova")
     @commands.has_any_role(*DIRETOR_ROLE_IDS)
     async def lniciar_prova(self, ctx, canal: discord.TextChannel = None):
         canal = canal or ctx.channel
 
         embed = discord.Embed(
-            title="📄 Prova da PRF",
-            description="Clique no botão abaixo para iniciar sua prova. Você terá 10 minutos para finalizar.",
+            title="📄 Prova Oficial da PRF",
+            description=(
+                "Para iniciar a prova, clique no botão abaixo. Você terá **10 minutos** para responder todas as perguntas.\n\n"
+                "**IMPORTANTE:** A prova será realizada em canal privado acessível apenas a você, aos diretores e ao bot."
+            ),
             color=discord.Color.green()
         )
         view = discord.ui.View()
