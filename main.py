@@ -1,21 +1,24 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
-import os
-import json
-import traceback
 from datetime import datetime
+import json, os
+import asyncio
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Config e outros comandos do seu main.py aqui (sem bot.add_cog(Edital(bot)))
+
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
+
+CARGO_CIVIL_ID = 1443537740821037136
+CARGO_PRF_ID = 1443387935700291697
 
 def carregar(arq, padrao):
     if not os.path.exists(arq):
         with open(arq, "w", encoding="utf-8") as f:
-            json.dump(padrao, f, indent=4, ensure_ascii=False)
+            json.dump(padrao, f, indent=4)
         return padrao
     with open(arq, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -25,75 +28,47 @@ advertencias = carregar(ARQ_ADV, {})
 
 def salvar_config():
     with open(ARQ_CONFIG, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+        json.dump(config, f, indent=4)
 
 def salvar_adv():
     with open(ARQ_ADV, "w", encoding="utf-8") as f:
-        json.dump(advertencias, f, indent=4, ensure_ascii=False)
+        json.dump(advertencias, f, indent=4)
 
 def eh_admin(membro):
     return any(r.id in config["admins"] for r in membro.roles)
 
-# Função para carregar o cog Edital com tratamento de erro
-def carregar_edital():
-    try:
-        from edital import Edital
-    except ModuleNotFoundError:
-        print("❌ Arquivo edital.py não encontrado. O bot NÃO vai carregar o Edital.")
-        return False
-    except Exception:
-        print("❌ Erro ao importar edital.py:")
-        traceback.print_exc()
-        return False
+def embed_padrao(t, d, c=0x2F3136):
+    e = discord.Embed(title=t, description=d, color=c)
+    e.set_footer(text="PRF • Sistema Oficial")
+    return e
 
+async def enviar(guild, canal_id, embed):
+    if canal_id:
+        canal = guild.get_channel(canal_id)
+        if canal:
+            await canal.send(embed=embed)
+
+async def dm_safe(user, embed):
     try:
-        bot.add_cog(Edital(bot))
-        print("✅ Cog Edital carregado com sucesso.")
-        return True
-    except Exception:
-        print("❌ Erro ao adicionar cog Edital:")
-        traceback.print_exc()
-        return False
+        await user.send(embed=embed)
+    except:
+        pass
 
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot logado como {bot.user} (ID: {bot.user.id})")
-    sucesso = carregar_edital()
+    await bot.tree.sync()
+    print(f"✅ BOT ONLINE — {bot.user}")
 
-    # Sincronizar comandos slash globalmente (pode demorar até 1 hora para aparecer em todos servidores)
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Comandos slash sincronizados: {len(synced)}")
-    except Exception:
-        print("❌ Erro ao sincronizar comandos slash:")
-        traceback.print_exc()
+# Seus comandos via @bot.tree.command (config-admin, incorporar, promover, etc) aqui
+# ... [copie exatamente seus comandos aqui sem alterações] ...
 
-    if not sucesso:
-        print("⚠️ ATENÇÃO: Cog Edital NÃO foi carregado!")
+# **IMPORTANTE: NÃO CHAME bot.add_cog(Edital(bot)) AQUI!**
 
-# Comando de teste para garantir que o bot está rodando
-@bot.tree.command(name="ping", description="Responde pong para testar o bot.")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong!", ephemeral=True)
+# INÍCIO DO GERENCIAMENTO ASSÍNCRONO PARA CARREGAR EXTENSÕES
 
-# Aqui você deve adicionar os outros comandos do seu main.py, como incorporar, promover, etc.
-# Exemplo para comando com app_commands:
+async def main():
+    async with bot:
+        await bot.load_extension("edital")  # Carrega o cog edital.py
+        await bot.start(os.getenv("DISCORD_TOKEN"))
 
-@bot.tree.command(name="config-admin", description="Configura um cargo como admin")
-@app_commands.describe(cargo="Cargo a ser configurado como admin")
-async def config_admin(interaction: discord.Interaction, cargo: discord.Role):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Apenas administradores podem usar.", ephemeral=True)
-        return
-    if cargo.id not in config["admins"]:
-        config["admins"].append(cargo.id)
-        salvar_config()
-    await interaction.response.send_message(f"✅ Cargo {cargo.name} configurado como admin.", ephemeral=True)
-
-# Roda o bot
-if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        print("❌ Variável DISCORD_TOKEN não encontrada no ambiente.")
-        exit(1)
-    bot.run(token)
+asyncio.run(main())
