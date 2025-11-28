@@ -7,9 +7,8 @@ from datetime import datetime, timedelta
 
 ARQ_PROVA = "edital_prova_data.json"
 
-DIRETOR_ROLE_IDS = [1443387915689398395, 1443387916633247766]  # IDs dos cargos diretores, configure no seu main antes de carregar o cog
-CANAL_RESULT_ID = 1443620398016237589
-CANAL_LOG_ID = 1443620192914640907
+DIRETOR_ROLE_IDS = [1443387915689398395, 1443387916633247766]  # IDs dos cargos de diretor para liberar acesso ao botão
+CANAL_RESULT_ID = 1443620398016237589  # Canal para anunciar resultado
 
 COOLDOWN_SEGUNDOS = 3600
 NUM_PERGUNTAS = 10
@@ -39,236 +38,231 @@ def salvar(dados):
     with open(ARQ_PROVA, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
 
-
-class ProvaView(discord.ui.View):
-    def __init__(self, bot, canal, user, cog):
-        super().__init__(timeout=600)  # 10 minutos timeout
-        self.bot = bot
-        self.channel = canal
-        self.user = user
-        self.cog = cog
-        self.dados = cog.dados
-        self.letras = ["A", "B", "C", "D"]
-
-        self.indice = 0
-        self.questoes = random.sample(PERGUNTAS, NUM_PERGUNTAS)
-        self.questoes_formatadas = []
-        for p in self.questoes:
-            alts = p["alternativas"].copy()
-            random.shuffle(alts)
-            correta = alts.index(p["alternativas"][p["correta"]])
-            self.questoes_formatadas.append({"pergunta": p["pergunta"], "alternativas": alts, "correta": correta})
-
-        self.respostas = []
-
-        # Criar botões dinamicamente
-        for i, letra in enumerate(self.letras):
-            self.add_item(RespostaButton(letra, i, self))
-
-    async def start(self):
-        # Salvar prova no cog.dados para poder gerenciar estado
-        self.dados["provas"][str(self.user.id)] = {
-            "questoes": self.questoes_formatadas,
-            "respostas": [],
-            "indice": 0,
-            "inicio": datetime.utcnow().isoformat()
-        }
-        salvar(self.dados)
-        await self.enviar_pergunta()
-
-    async def enviar_pergunta(self):
-        indice = self.dados["provas"][str(self.user.id)]["indice"]
-        q = self.questoes_formatadas[indice]
-        texto = "\n".join(f"**{self.letras[i]}** — {alt}" for i, alt in enumerate(q["alternativas"]))
-        embed = discord.Embed(
-            title=f"Questão {indice+1}/{NUM_PERGUNTAS}",
-            description=f"{q['pergunta']}\n\n{texto}",
-            color=0x3498db
-        )
-        await self.channel.send(embed=embed, view=self)
-
-    async def processar_resposta(self, letra_idx):
-        dados_prova = self.dados["provas"][str(self.user.id)]
-        dados_prova["respostas"].append(letra_idx)
-        dados_prova["indice"] += 1
-        salvar(self.dados)
-
-        if dados_prova["indice"] < NUM_PERGUNTAS:
-            await self.enviar_pergunta()
-        else:
-            await self.finalizar()
-
-    async def finalizar(self):
-        dados_prova = self.dados["provas"].pop(str(self.user.id))
-        salvar(self.dados)
-
-        pontos = sum(
-            1 for i, q in enumerate(dados_prova["questoes"]) if dados_prova["respostas"][i] == q["correta"]
-        )
-        aprovado = pontos >= MIN_PONTOS
-        status = "✅ APROVADO" if aprovado else "❌ REPROVADO"
-        embed = discord.Embed(
-            title="Resultado da Prova",
-            description=f"{self.user.mention} fez a prova\nPontuação: {pontos}/{NUM_PERGUNTAS}\n{status}",
-            color=0x2ecc71 if aprovado else 0xe74c3c
-        )
-        await self.channel.send(embed=embed)
-
-        # Enviar no canal de resultados, se configurado
-        if self.cog.result_channel:
-            c = self.bot.get_channel(self.cog.result_channel)
-            if c:
-                await c.send(embed=embed)
-
-        # Enviar no canal de logs, se configurado
-        if self.cog.log_channel:
-            c = self.bot.get_channel(self.cog.log_channel)
-            if c:
-                await c.send(embed=discord.Embed(title=f"Log {self.user}", description=f"Pontuação: {pontos}", color=0x7f8c8d))
-
-        # Deletar canal privado de prova
-        try:
-            await self.channel.delete(reason="Prova finalizada")
-        except:
-            pass
-
-
-class RespostaButton(discord.ui.Button):
-    def __init__(self, letra, indice, view):
-        super().__init__(label=letra, style=discord.ButtonStyle.primary)
-        self.letra_idx = indice
-        self.view = view
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.view.user.id:
-            await interaction.response.send_message("Essa prova não é para você.", ephemeral=True)
-            return
-
-        await interaction.response.defer()
-        await self.view.processar_resposta(self.letra_idx)
-        await interaction.followup.send(f"Resposta {self.label} registrada.", ephemeral=True)
-
-
-class IniciarProvaButton(discord.ui.Button):
-    def __init__(self, cog):
-        super().__init__(label="Iniciar Prova", style=discord.ButtonStyle.success)
-        self.cog = cog
-
-    async def callback(self, interaction: discord.Interaction):
-        user = interaction.user
-        guild = interaction.guild
-
-        if not guild:
-            await interaction.response.send_message("Este comando só pode ser usado dentro do servidor.", ephemeral=True)
-            return
-
-        # Verifica se o usuário já está fazendo a prova
-        if user.id in self.cog.provas_ativas:
-            await interaction.response.send_message("Você já está fazendo uma prova.", ephemeral=True)
-            return
-
-        # Defer para evitar timeout
-        await interaction.response.defer(ephemeral=True)
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        }
-        for role_id in DIRETOR_ROLE_IDS:
-            role = guild.get_role(role_id)
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-        categoria = None
-        if hasattr(self.cog, "categoria_provas_id") and self.cog.categoria_provas_id:
-            categoria = guild.get_channel(self.cog.categoria_provas_id)
-
-        nome_canal = f"prova-{user.name}".lower().replace(" ", "-")[:90]
-
-        channel = await guild.create_text_channel(nome_canal, overwrites=overwrites, category=categoria, reason="Canal privado para prova")
-
-        voz_canal = None
-        try:
-            if user.voice and user.voice.channel:
-                overwrites_voice = {
-                    guild.default_role: discord.PermissionOverwrite(connect=False),
-                    user: discord.PermissionOverwrite(connect=True, speak=True)
-                }
-                for role_id in DIRETOR_ROLE_IDS:
-                    role = guild.get_role(role_id)
-                    if role:
-                        overwrites_voice[role] = discord.PermissionOverwrite(connect=True, speak=True)
-
-                voz_canal = await guild.create_voice_channel(f"Prova VC - {user.name}", overwrites=overwrites_voice, category=categoria, reason="Canal de voz privado para prova")
-                await user.move_to(voz_canal)
-        except Exception as e:
-            print(f"Erro ao mover usuário para canal de voz: {e}")
-
-        prova_view = ProvaView(self.cog.bot, channel, user, self.cog)
-        self.cog.provas_ativas[user.id] = prova_view
-        await prova_view.start()
-
-        await interaction.followup.send(
-            f"Canal privado criado: {channel.mention}" + (f" e canal de voz criado: {voz_canal.mention}" if voz_canal else ""),
-            ephemeral=True
-        )
-
-
 class Edital(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.dados = carregar()
         self.result_channel = CANAL_RESULT_ID
-        self.log_channel = CANAL_LOG_ID
-        self.categoria_provas_id = None  # Id da categoria para os canais de prova (pode setar via comando)
-        self.provas_ativas = {}  # user_id: ProvaView instance
         self._limpar.start()
 
     def cog_unload(self):
         self._limpar.cancel()
 
-    @commands.hybrid_command(name="setcanalresult")
+    @commands.hybrid_command(name="setcanalresultado", description="Define canal público de resultados")
     @commands.has_permissions(administrator=True)
-    async def setcanalresult(self, ctx, canal: discord.TextChannel):
+    async def setcanalresultado(self, ctx, canal: discord.TextChannel):
         self.result_channel = canal.id
-        await ctx.reply(embed=discord.Embed(
-            title="✅ Configurado",
-            description=f"Canal de resultados definido: {canal.mention}",
-            color=0x2ecc71
-        ), ephemeral=True)
+        await ctx.reply(f"✅ Canal de resultados definido: {canal.mention}", ephemeral=True)
 
-    @commands.hybrid_command(name="setcategorianoticias")
-    @commands.has_permissions(administrator=True)
-    async def setcategorianoticias(self, ctx, categoria: discord.CategoryChannel):
-        self.categoria_provas_id = categoria.id
-        await ctx.reply(embed=discord.Embed(
-            title="✅ Configurado",
-            description=f"Categoria para canais de prova definida: {categoria.name}",
-            color=0x2ecc71
-        ), ephemeral=True)
-
-    @commands.hybrid_command(name="enviarprova")
+    @commands.hybrid_command(name="iniciarprova", description="Envia embed com botão para iniciar prova (diretores)")
     @commands.has_any_role(*DIRETOR_ROLE_IDS)
-    async def enviarprova(self, ctx):
+    async def iniciarprova(self, ctx):
         embed = discord.Embed(
-            title="📋 Prova PRF",
+            title="📋 Prova do Edital",
             description=(
-                "Você pode iniciar a prova clicando no botão abaixo.\n"
-                "A prova terá 10 perguntas e você terá 10 minutos para responder.\n"
-                "Se não terminar no tempo, será reprovado automaticamente.\n"
-                "Ao iniciar, será criado um canal privado para a prova com você, os diretores e o bot."
+                "Clique no botão abaixo para iniciar sua prova.\n"
+                "Você terá 10 minutos para completá-la.\n"
+                "Boa sorte!"
             ),
-            color=0x3498db
+            color=0x3498DB
         )
-        view = discord.ui.View()
-        view.add_item(IniciarProvaButton(self))
+        view = self.BotaoIniciarProva(self)
         await ctx.send(embed=embed, view=view)
+
+    class BotaoIniciarProva(discord.ui.View):
+        def __init__(self, cog):
+            super().__init__(timeout=None)
+            self.cog = cog
+
+        @discord.ui.button(label="Iniciar Prova", style=discord.ButtonStyle.primary)
+        async def iniciar_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+            uid = str(interaction.user.id)
+            # Verifica cooldown
+            agora = datetime.utcnow()
+            tentativas = self.cog.dados.get("tentativas", {})
+            if uid in tentativas:
+                dt = datetime.fromisoformat(tentativas[uid])
+                diff = (agora - dt).total_seconds()
+                if diff < COOLDOWN_SEGUNDOS:
+                    await interaction.response.send_message(f"⏳ Você está em cooldown. Tente novamente mais tarde.", ephemeral=True)
+                    return
+
+            # Cria canal privado para o usuário e os diretores
+            guild = interaction.guild
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            # Permissão para diretores
+            for role_id in DIRETOR_ROLE_IDS:
+                role = guild.get_role(role_id)
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+            canal = await guild.create_text_channel(
+                name=f"prova-{interaction.user.name}",
+                overwrites=overwrites,
+                topic=f"Prova do edital para {interaction.user}",
+                reason="Canal privado de prova"
+            )
+
+            # Salva estado da prova
+            perguntas = random.sample(PERGUNTAS, NUM_PERGUNTAS)
+            questoes = []
+            for p in perguntas:
+                alts = p["alternativas"].copy()
+                random.shuffle(alts)
+                correta = alts.index(p["alternativas"][p["correta"]])
+                questoes.append({"pergunta": p["pergunta"], "alternativas": alts, "correta": correta})
+
+            self.cog.dados["provas"][uid] = {
+                "questoes": questoes,
+                "respostas": [],
+                "indice": 0,
+                "inicio": agora.isoformat(),
+                "canal": canal.id
+            }
+            self.cog.dados["tentativas"][uid] = agora.isoformat()
+            salvar(self.cog.dados)
+
+            await interaction.response.send_message(f"✅ Canal criado: {canal.mention}. Prova iniciada!", ephemeral=True)
+
+            # Envia primeira questão
+            await self.cog.enviar_questao(interaction.user, canal)
+
+    async def enviar_questao(self, user, canal):
+        uid = str(user.id)
+        prova = self.dados["provas"].get(uid)
+        if not prova:
+            return
+
+        indice = prova["indice"]
+        if indice >= NUM_PERGUNTAS:
+            await self.finalizar_prova(user, canal)
+            return
+
+        questao = prova["questoes"][indice]
+
+        embed = discord.Embed(
+            title=f"Questão {indice+1}/{NUM_PERGUNTAS}",
+            description=questao["pergunta"],
+            color=0x95a5a6
+        )
+
+        view = self.RespostaView(self, user, canal)
+
+        letras = ["A", "B", "C", "D"]
+        texto = ""
+        for i, alt in enumerate(questao["alternativas"]):
+            texto += f"**{letras[i]}** — {alt}\n"
+        embed.add_field(name="Alternativas", value=texto, inline=False)
+
+        await canal.send(f"{user.mention}", embed=embed, view=view)
+
+    class RespostaView(discord.ui.View):
+        def __init__(self, cog, user, canal):
+            super().__init__(timeout=600)  # 10 minutos timeout
+            self.cog = cog
+            self.user = user
+            self.canal = canal
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            if interaction.user != self.user:
+                await interaction.response.send_message("❌ Esta prova não é para você.", ephemeral=True)
+                return False
+            return True
+
+        @discord.ui.button(label="A", style=discord.ButtonStyle.secondary)
+        async def botao_a(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.responder(interaction, 0)
+
+        @discord.ui.button(label="B", style=discord.ButtonStyle.secondary)
+        async def botao_b(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.responder(interaction, 1)
+
+        @discord.ui.button(label="C", style=discord.ButtonStyle.secondary)
+        async def botao_c(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.responder(interaction, 2)
+
+        @discord.ui.button(label="D", style=discord.ButtonStyle.secondary)
+        async def botao_d(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.responder(interaction, 3)
+
+        async def responder(self, interaction: discord.Interaction, resposta: int):
+            uid = str(self.user.id)
+            prova = self.cog.dados["provas"].get(uid)
+            if not prova:
+                await interaction.response.send_message("❌ Prova não encontrada ou expirada.", ephemeral=True)
+                return
+
+            prova["respostas"].append(resposta)
+            prova["indice"] += 1
+            salvar(self.cog.dados)
+
+            # Apaga a mensagem anterior para evitar spam
+            await interaction.message.delete()
+
+            canal = self.canal
+            # Se ainda tem questões, envia próxima
+            if prova["indice"] < NUM_PERGUNTAS:
+                await self.cog.enviar_questao(self.user, canal)
+            else:
+                await self.cog.finalizar_prova(self.user, canal)
+
+            await interaction.response.send_message(f"Resposta {['A','B','C','D'][resposta]} registrada.", ephemeral=True)
+
+    async def finalizar_prova(self, user, canal):
+        uid = str(user.id)
+        prova = self.dados["provas"].pop(uid, None)
+        if not prova:
+            return
+
+        pontos = sum(1 for i, q in enumerate(prova["questoes"]) if prova["respostas"][i] == q["correta"])
+        aprovado = pontos >= MIN_PONTOS
+        status = "✅ APROVADO" if aprovado else "❌ REPROVADO"
+
+        embed = discord.Embed(
+            title="Resultado da Prova",
+            description=f"{user.mention} obteve {pontos}/{NUM_PERGUNTAS} — {status}",
+            color=0x2ecc71 if aprovado else 0xe74c3c
+        )
+
+        if self.result_channel:
+            ch = self.bot.get_channel(self.result_channel)
+            if ch:
+                await ch.send(embed=embed)
+
+        await canal.send(embed=embed)
+
+        # Remove canal da prova após 1 minuto
+        await asyncio.sleep(60)
+        try:
+            await canal.delete(reason="Encerramento da prova")
+        except:
+            pass
 
     @tasks.loop(hours=24)
     async def _limpar(self):
         agora = datetime.utcnow()
-        for k, v in list(self.dados["tentativas"].items()):
-            dt = datetime.fromisoformat(v)
-            if agora - dt > timedelta(days=1):
-                self.dados["tentativas"].pop(k)
-        salvar(self.dados)
+        alterou = False
+        for uid, prov in list(self.dados["provas"].items()):
+            try:
+                inicio = datetime.fromisoformat(prov.get("inicio"))
+                if agora - inicio > timedelta(days=7):
+                    self.dados["provas"].pop(uid, None)
+                    alterou = True
+            except Exception:
+                continue
+        for uid, tent in list(self.dados["tentativas"].items()):
+            try:
+                dt = datetime.fromisoformat(tent)
+                if agora - dt > timedelta(days=30):
+                    self.dados["tentativas"].pop(uid, None)
+                    alterou = True
+            except Exception:
+                continue
+        if alterou:
+            salvar(self.dados)
+
+async def setup(bot):
+    await bot.add_cog(Edital(bot))
