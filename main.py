@@ -421,7 +421,9 @@ async def veradv(interaction: discord.Interaction, usuario: discord.Member):
 async def main():
     async with bot: 
         await bot.load_extension("edital")
+        await bot.load_extension("folha_ponto_prf")
         await bot.start(os.getenv("DISCORD_TOKEN"))
 
 asyncio.run(main())
+
 
