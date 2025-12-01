@@ -106,40 +106,115 @@ async def setlogs(interaction: discord.Interaction, canal: discord.TextChannel):
 # REGISTRO
 # =============================
 
-@bot.tree.command(name="registrar", description="Registrar novo policial PRF")
-async def registrar(interaction: discord.Interaction, usuario: discord.Member, cargo: discord.Role, nick: str):
+@bot.tree.command(name="registrar", description="Registrar oficialmente um servidor na PRF")
+async def registrar(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    role: discord.Role,
+    cargo: str,
+    nome: str
+):
     if not eh_admin(interaction.user):
         return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
+
+    uid = str(usuario.id)
+
+    if uid in servidores:
+        return await interaction.response.send_message("Este servidor já se encontra registrado no sistema.", ephemeral=True)
 
     cargo_prf = interaction.guild.get_role(CARGO_PRF_ID)
     cargo_civil = interaction.guild.get_role(CARGO_CIVIL_ID)
 
-    nome = f"『PRF』{cargo.name}│{nick}"
+    nome_formatado = f"『PRF』{cargo}│{nome}"
 
     try:
-        await usuario.edit(nick=nome)
+        await usuario.edit(nick=nome_formatado)
     except:
         pass
 
+    await usuario.add_roles(role)
     if cargo_prf:
         await usuario.add_roles(cargo_prf)
-    await usuario.add_roles(cargo)
-
     if cargo_civil:
         await usuario.remove_roles(cargo_civil)
 
+    servidores[uid] = {
+        "usuario": usuario.name,
+        "id": usuario.id,
+        "cargo": cargo,
+        "role": role.name,
+        "nome": nome,
+        "matricula": usuario.id,
+        "registrado_em": datetime.now().strftime("%d/%m/%Y %H:%M")
+    }
+
+    salvar_serv()
+
     embed = embed_padrao(
-        "📑 ATO OFICIAL DE INCORPORAÇÃO",
-        f"A Superintendência da Polícia Rodoviária Federal comunica que o(a) cidadão(ã) {usuario.mention} "
-        f"foi oficialmente incorporado(a) ao efetivo da corporação.\n\n"
-        f"🎖 Cargo: {cargo.mention}\n"
-        f"🪪 Nome de serviço: {nome}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        0x2563eb
+        "📑 REGISTRO ADMINISTRATIVO",
+        f"O(a) cidadão(ã) {usuario.mention} foi oficialmente incorporado(a) à Polícia Rodoviária Federal.\n\n"
+        f"🎖 Cargo: {cargo}\n"
+        f"🏷 Cargo operacional: {role.mention}\n"
+        f"🪪 Nome institucional: {nome_formatado}\n"
+        f"🆔 Matrícula: {usuario.id}\n"
+        f"📅 Data de incorporação: {servidores[uid]['registrado_em']}\n\n"
+        f"Ato válido para fins administrativos.",
+        0x1e40af
     )
 
     await enviar(interaction.guild, config["canal_folha"], embed)
-    await interaction.response.send_message("Registro efetuado com êxito.", ephemeral=True)
+    await interaction.response.send_message("Servidor registrado oficialmente.", ephemeral=True)
+
+
+# =============================
+# VER SERVLDOR
+# =============================
+
+@bot.tree.command(name="verficha", description="Consultar ficha funcional de um servidor")
+async def verficha(interaction: discord.Interaction, usuario: discord.Member):
+    if not eh_admin(interaction.user):
+        return await interaction.response.send_message("Acesso restrito.", ephemeral=True)
+
+    uid = str(usuario.id)
+
+    if uid not in servidores:
+        return await interaction.response.send_message("Este servidor não possui registro ativo.", ephemeral=True)
+
+    s = servidores[uid]
+
+    embed = embed_padrao(
+        "📂 FICHA FUNCIONAL",
+        f"👮 Servidor: {usuario.mention}\n"
+        f"🆔 Matrícula: {s['matricula']}\n"
+        f"🎖 Cargo: {s['cargo']}\n"
+        f"🏷 Cargo operacional: {s['role']}\n"
+        f"📛 Nome do servidor: {s['nome']}\n"
+        f"📅 Data de Incorporação: {s['registrado_em']}",
+        0x9333ea
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# =============================
+# VER EFETLVO
+# =============================
+
+@bot.tree.command(name="efetivo", description="Listar policiais ativos da PRF")
+async def efetivo(interaction: discord.Interaction):
+    if not eh_admin(interaction.user):
+        return await interaction.response.send_message("Acesso restrito.", ephemeral=True)
+
+    if not servidores:
+        return await interaction.response.send_message("Não há servidores ativos registrados.", ephemeral=True)
+
+    texto = ""
+    for s in servidores.values():
+        texto += f"• {s['cargo']} — {s['nome']} (Matrícula {s['matricula']})\n"
+
+    embed = embed_padrao("📋 EFETIVO ATIVO — PRF", texto, 0x0f172a)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 # =============================
 # PROMOÇÃO
@@ -286,3 +361,4 @@ async def main():
         await bot.load_extension("edital") # CARREGA edital.py 
         await bot.start(os.getenv("DISCORD_TOKEN")) 
 asyncio.run(main())
+
