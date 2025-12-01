@@ -1,5 +1,3 @@
-# edital.py — SISTEMA DEFINITIVO DA PROVA PRF
-
 import discord, json, os, random, asyncio
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
@@ -44,8 +42,6 @@ class Edital(commands.Cog):
         self.data = load()
         self.timer.start()
 
-    # -------- CONFIG -------- #
-
     @commands.hybrid_command(name="setarmarcacategoria")
     @commands.has_permissions(administrator=True)
     async def setcat(self, ctx, categoria: discord.CategoryChannel):
@@ -60,12 +56,10 @@ class Edital(commands.Cog):
         CANAL_RESULTADOS = canal.id
         await ctx.reply("✅ Canal de resultados definido.", ephemeral=True)
 
-    # -------- PUBLICAR EDITAL -------- #
-
     @commands.hybrid_command(name="publicarprova")
     async def publicar(self, ctx):
         if not (ctx.author.guild_permissions.administrator or any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles)):
-            return await ctx.reply("❌ apenas diretores.", ephemeral=True)
+            return await ctx.reply("❌ Apenas diretores.", ephemeral=True)
 
         embed = discord.Embed(
             title="📘 PROVA OFICIAL PRF",
@@ -74,8 +68,6 @@ class Edital(commands.Cog):
         )
 
         await ctx.send(embed=embed, view=BotaoIniciar(self))
-
-    # -------- CRIAR PROVA -------- #
 
     async def iniciar_prova(self, user, guild):
         now = datetime.utcnow()
@@ -87,13 +79,15 @@ class Edital(commands.Cog):
                 return None, "⏳ Aguarde para nova tentativa."
 
         categoria = guild.get_channel(CATEGORIA_PROVAS)
+        if not categoria:
+            return None, "❌ Categoria não configurada."
 
         canal = await guild.create_text_channel(
             f"📄-prova-{user.name}",
             category=categoria,
             overwrites={
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                user: discord.PermissionOverwrite(view_channel=True),
+                user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
                 **{guild.get_role(r): discord.PermissionOverwrite(view_channel=True) for r in DIRETOR_ROLE_IDS}
             }
         )
@@ -123,14 +117,14 @@ class Edital(commands.Cog):
         q = prova["q"][prova["i"]]
 
         embed = discord.Embed(title=f"Questão {prova['i']+1}/10", description=q["p"], color=0x1f2937)
-
         for i,a in enumerate(q["a"]):
             embed.add_field(name=chr(65+i), value=a, inline=False)
 
         await canal.send(user.mention, embed=embed, view=ResView(self, user, canal))
 
     async def finalizar(self, user, canal, timeout=False):
-        prova = self.data["provas"].pop(str(user.id))
+        prova = self.data["provas"].pop(str(user.id), None)
+        if not prova: return
         save(self.data)
 
         pontos = sum(1 for i,q in enumerate(prova["q"]) if prova["r"][i] == q["c"])
@@ -140,20 +134,14 @@ class Edital(commands.Cog):
         emb.add_field(name="Candidato", value=user.mention)
         emb.add_field(name="Pontuação", value=f"{pontos}/10")
         emb.add_field(name="Status", value="✅ APROVADO" if aprovado else "❌ REPROVADO")
-
-        if timeout:
-            emb.add_field(name="Motivo", value="Tempo excedido")
+        if timeout: emb.add_field(name="Motivo", value="Tempo excedido")
 
         await canal.send(embed=emb)
+        ch = self.bot.get_channel(CANAL_RESULTADOS)
+        if ch: await ch.send(embed=emb)
 
-        if CANAL_RESULTADOS:
-            ch = self.bot.get_channel(CANAL_RESULTADOS)
-            if ch: await ch.send(embed=emb)
-
-        await asyncio.sleep(20)
+        await asyncio.sleep(15)
         await canal.delete()
-
-    # -------- TIMER -------- #
 
     @tasks.loop(seconds=30)
     async def timer(self):
@@ -163,45 +151,62 @@ class Edital(commands.Cog):
             if (now-start).total_seconds() >= TEMPO:
                 canal = self.bot.get_channel(d["canal"])
                 user = await self.bot.fetch_user(int(uid))
-                await self.finalizar(user, canal, True)
-
-# -------- BOTÃO -------- #
+                if canal:
+                    await self.finalizar(user, canal, True)
 
 class BotaoIniciar(discord.ui.View):
-    def __init__(self, cog): super().__init__(timeout=None); self.cog = cog
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
 
     @discord.ui.button(label="✅ INICIAR PROVA", style=discord.ButtonStyle.success)
-    async def start(self, i, _):
-        canal, erro = await self.cog.iniciar_prova(i.user, i.guild)
+    async def start(self, interaction: discord.Interaction, _):
+        await interaction.response.defer(ephemeral=True)
+        canal, erro = await self.cog.iniciar_prova(interaction.user, interaction.guild)
 
         if erro:
-            return await i.response.send_message(erro, ephemeral=True)
+            return await interaction.followup.send(erro, ephemeral=True)
 
-        await i.response.send_message(f"✅ Sua prova começou!\n👉 Acesse: {canal.mention}", ephemeral=True)
-        await self.cog.enviar(i.user, canal)
-
-# -------- RESPOSTAS -------- #
+        await interaction.followup.send(f"✅ Prova criada!\n👉 {canal.mention}", ephemeral=True)
+        await self.cog.enviar(interaction.user, canal)
 
 class ResView(discord.ui.View):
-    def __init__(self, cog, user, canal): super().__init__(timeout=None); self.cog=cog;self.u=user;self.c=canal
+    def __init__(self, cog, user, canal):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.u = user
+        self.c = canal
 
-    async def marcar(self, i, n):
+    async def marcar(self, interaction, n):
         prova = self.cog.data["provas"].get(str(self.u.id))
-        if not prova: return
+        if not prova:
+            return await interaction.response.send_message("⛔ Prova encerrada.", ephemeral=True)
+
         prova["r"].append(n)
         prova["i"] += 1
         save(self.cog.data)
-        await i.message.delete()
+        await interaction.message.delete()
 
         if prova["i"] < PERGUNTAS_QTD:
             await self.cog.enviar(self.u, self.c)
         else:
             await self.cog.finalizar(self.u, self.c)
 
-    @discord.ui.button(label="A", style=discord.ButtonStyle.secondary) async def a(self,i,_): await self.marcar(i,0)
-    @discord.ui.button(label="B", style=discord.ButtonStyle.secondary) async def b(self,i,_): await self.marcar(i,1)
-    @discord.ui.button(label="C", style=discord.ButtonStyle.secondary) async def c(self,i,_): await self.marcar(i,2)
-    @discord.ui.button(label="D", style=discord.ButtonStyle.secondary) async def d(self,i,_): await self.marcar(i,3)
+    @discord.ui.button(label="A", style=discord.ButtonStyle.secondary)
+    async def a(self, interaction, _):
+        await self.marcar(interaction, 0)
+
+    @discord.ui.button(label="B", style=discord.ButtonStyle.secondary)
+    async def b(self, interaction, _):
+        await self.marcar(interaction, 1)
+
+    @discord.ui.button(label="C", style=discord.ButtonStyle.secondary)
+    async def c(self, interaction, _):
+        await self.marcar(interaction, 2)
+
+    @discord.ui.button(label="D", style=discord.ButtonStyle.secondary)
+    async def d(self, interaction, _):
+        await self.marcar(interaction, 3)
 
 async def setup(bot):
     await bot.add_cog(Edital(bot))
