@@ -1,268 +1,245 @@
 import discord
 from discord.ext import commands, tasks
-import json
-import os
-import random
+import json, os, random, asyncio
 from datetime import datetime, timedelta
 
 ARQ_PROVA = "edital_prova_data.json"
 
-DIRETOR_ROLE_IDS = [1443387915689398395, 1443387916633247766]  # IDs dos cargos de diretor para liberar acesso ao botão
-CANAL_RESULT_ID = 1443620398016237589  # Canal para anunciar resultado
+# ========= CONFIGURAÇÃO ========= #
+DIRETOR_ROLE_IDS = []   # IDs dos diretores
+CATEGORIA_PROVAS_ID = None  # ID da categoria "PROVAS PRF"
+CANAL_RESULTADOS_ID = None  # Canal público de resultados
 
-COOLDOWN_SEGUNDOS = 3600
+TEMPO_LIMITE = 600  # 10 minutos
 NUM_PERGUNTAS = 10
 MIN_PONTOS = 6
+COOLDOWN_SEGUNDOS = 3600
 
+# ========= PERGUNTAS ========= #
 PERGUNTAS = [
     {"pergunta": "Capital do Brasil?", "alternativas": ["Rio", "Brasília", "São Paulo", "Recife"], "correta": 1},
     {"pergunta": "Maior planeta?", "alternativas": ["Terra", "Marte", "Júpiter", "Saturno"], "correta": 2},
     {"pergunta": "Fórmula da água?", "alternativas": ["H2O", "CO2", "O2", "NaCl"], "correta": 0},
-    {"pergunta": "Ano do descobrimento do Brasil?", "alternativas": ["1498", "1500", "1510", "1600"], "correta": 1},
     {"pergunta": "Criador do Python?", "alternativas": ["Linus", "Bill", "Guido", "Mark"], "correta": 2},
     {"pergunta": "Primeiro presidente do Brasil?", "alternativas": ["Getúlio", "Deodoro", "Lula", "Sarney"], "correta": 1},
-    {"pergunta": "Base da programação?", "alternativas": ["Lógica", "HTML", "CSS", "SQL"], "correta": 0},
-    {"pergunta": "Maior oceano?", "alternativas": ["Atlântico", "Indico", "Pacífico", "Ártico"], "correta": 2},
-    {"pergunta": "Sistema do Discord?", "alternativas": ["Slack", "Teams", "Guilds", "Servers"], "correta": 3},
+    {"pergunta": "Maior oceano?", "alternativas": ["Atlântico", "Índico", "Pacífico", "Ártico"], "correta": 2},
     {"pergunta": "Python é?", "alternativas": ["Compilado", "Interpretado", "Binário", "Assembly"], "correta": 1},
-    {"pergunta": "RAM significa?", "alternativas": ["Read", "Random", "Run", "Rapid"], "correta": 1}
 ]
 
+# ================= FUNÇÕES ================= #
 def carregar():
     if not os.path.exists(ARQ_PROVA):
         return {"tentativas": {}, "provas": {}}
     with open(ARQ_PROVA, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def salvar(dados):
+def salvar(d):
     with open(ARQ_PROVA, "w", encoding="utf-8") as f:
-        json.dump(dados, f, indent=4, ensure_ascii=False)
+        json.dump(d, f, ensure_ascii=False, indent=4)
 
+# ================= COG ================= #
 class Edital(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.dados = carregar()
-        self.result_channel = CANAL_RESULT_ID
         self._limpar.start()
 
-    def cog_unload(self):
-        self._limpar.cancel()
-
-    @commands.hybrid_command(name="setcanalresultado", description="Define canal público de resultados")
+    # ========= CONFIG ========= #
+    @commands.hybrid_command(name="setcanalresultado")
     @commands.has_permissions(administrator=True)
     async def setcanalresultado(self, ctx, canal: discord.TextChannel):
-        self.result_channel = canal.id
-        await ctx.reply(f"✅ Canal de resultados definido: {canal.mention}", ephemeral=True)
+        global CANAL_RESULTADOS_ID
+        CANAL_RESULTADOS_ID = canal.id
+        await ctx.reply("✅ Canal de resultados definido.", ephemeral=True)
 
-    @commands.hybrid_command(name="iniciarprova", description="Envia embed com botão para iniciar prova (diretores)")
-    @commands.has_any_role(*DIRETOR_ROLE_IDS)
+    @commands.hybrid_command(name="setcategoriaprovas")
+    @commands.has_permissions(administrator=True)
+    async def setcategoriaprovas(self, ctx, categoria: discord.CategoryChannel):
+        global CATEGORIA_PROVAS_ID
+        CATEGORIA_PROVAS_ID = categoria.id
+        await ctx.reply("✅ Categoria das provas definida.", ephemeral=True)
+
+    # ========= EMBED INICIAL ========= #
+    @commands.hybrid_command(name="iniciarprova")
     async def iniciarprova(self, ctx):
+        if not (ctx.author.guild_permissions.administrator or any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles)):
+            return await ctx.reply("❌ Sem permissão.", ephemeral=True)
+
         embed = discord.Embed(
-            title="📋 Prova do Edital",
+            title="📄 EDITAL PRF - PROVA OFICIAL",
             description=(
-                "Clique no botão abaixo para iniciar sua prova.\n"
-                "Você terá 10 minutos para completá-la.\n"
-                "Boa sorte!"
+                "Clique no botão abaixo para iniciar a prova.\n\n"
+                "📌 **Regras:**\n"
+                "• Tempo limite: 10 minutos\n"
+                "• 10 questões\n"
+                "• Nota mínima: 6\n"
+                "• Fraudes = eliminação\n\n"
+                "⚠️ Ao iniciar você concorda com o edital."
             ),
-            color=0x3498DB
+            color=0x1F3A8A
         )
-        view = self.BotaoIniciarProva(self)
-        await ctx.send(embed=embed, view=view)
 
-    class BotaoIniciarProva(discord.ui.View):
-        def __init__(self, cog):
-            super().__init__(timeout=None)
-            self.cog = cog
+        await ctx.send(embed=embed, view=BotaoIniciar(self))
 
-        @discord.ui.button(label="Iniciar Prova", style=discord.ButtonStyle.primary)
-        async def iniciar_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-            uid = str(interaction.user.id)
-            # Verifica cooldown
-            agora = datetime.utcnow()
-            tentativas = self.cog.dados.get("tentativas", {})
-            if uid in tentativas:
-                dt = datetime.fromisoformat(tentativas[uid])
-                diff = (agora - dt).total_seconds()
-                if diff < COOLDOWN_SEGUNDOS:
-                    await interaction.response.send_message(f"⏳ Você está em cooldown. Tente novamente mais tarde.", ephemeral=True)
-                    return
-
-            # Cria canal privado para o usuário e os diretores
-            guild = interaction.guild
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            }
-            # Permissão para diretores
-            for role_id in DIRETOR_ROLE_IDS:
-                role = guild.get_role(role_id)
-                if role:
-                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-            canal = await guild.create_text_channel(
-                name=f"prova-{interaction.user.name}",
-                overwrites=overwrites,
-                topic=f"Prova do edital para {interaction.user}",
-                reason="Canal privado de prova"
-            )
-
-            # Salva estado da prova
-            perguntas = random.sample(PERGUNTAS, NUM_PERGUNTAS)
-            questoes = []
-            for p in perguntas:
-                alts = p["alternativas"].copy()
-                random.shuffle(alts)
-                correta = alts.index(p["alternativas"][p["correta"]])
-                questoes.append({"pergunta": p["pergunta"], "alternativas": alts, "correta": correta})
-
-            self.cog.dados["provas"][uid] = {
-                "questoes": questoes,
-                "respostas": [],
-                "indice": 0,
-                "inicio": agora.isoformat(),
-                "canal": canal.id
-            }
-            self.cog.dados["tentativas"][uid] = agora.isoformat()
-            salvar(self.cog.dados)
-
-            await interaction.response.send_message(f"✅ Canal criado: {canal.mention}. Prova iniciada!", ephemeral=True)
-
-            # Envia primeira questão
-            await self.cog.enviar_questao(interaction.user, canal)
-
+    # ========= ENVIO PERGUNTA ========= #
     async def enviar_questao(self, user, canal):
-        uid = str(user.id)
-        prova = self.dados["provas"].get(uid)
-        if not prova:
-            return
-
-        indice = prova["indice"]
-        if indice >= NUM_PERGUNTAS:
-            await self.finalizar_prova(user, canal)
-            return
-
-        questao = prova["questoes"][indice]
-
-        embed = discord.Embed(
-            title=f"Questão {indice+1}/{NUM_PERGUNTAS}",
-            description=questao["pergunta"],
-            color=0x95a5a6
-        )
-
-        view = self.RespostaView(self, user, canal)
+        prova = self.dados["provas"][str(user.id)]
+        q = prova["questoes"][prova["indice"]]
 
         letras = ["A", "B", "C", "D"]
-        texto = ""
-        for i, alt in enumerate(questao["alternativas"]):
-            texto += f"**{letras[i]}** — {alt}\n"
-        embed.add_field(name="Alternativas", value=texto, inline=False)
-
-        await canal.send(f"{user.mention}", embed=embed, view=view)
-
-    class RespostaView(discord.ui.View):
-        def __init__(self, cog, user, canal):
-            super().__init__(timeout=600)  # 10 minutos timeout
-            self.cog = cog
-            self.user = user
-            self.canal = canal
-
-        async def interaction_check(self, interaction: discord.Interaction) -> bool:
-            if interaction.user != self.user:
-                await interaction.response.send_message("❌ Esta prova não é para você.", ephemeral=True)
-                return False
-            return True
-
-        @discord.ui.button(label="A", style=discord.ButtonStyle.secondary)
-        async def botao_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.responder(interaction, 0)
-
-        @discord.ui.button(label="B", style=discord.ButtonStyle.secondary)
-        async def botao_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.responder(interaction, 1)
-
-        @discord.ui.button(label="C", style=discord.ButtonStyle.secondary)
-        async def botao_c(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.responder(interaction, 2)
-
-        @discord.ui.button(label="D", style=discord.ButtonStyle.secondary)
-        async def botao_d(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.responder(interaction, 3)
-
-        async def responder(self, interaction: discord.Interaction, resposta: int):
-            uid = str(self.user.id)
-            prova = self.cog.dados["provas"].get(uid)
-            if not prova:
-                await interaction.response.send_message("❌ Prova não encontrada ou expirada.", ephemeral=True)
-                return
-
-            prova["respostas"].append(resposta)
-            prova["indice"] += 1
-            salvar(self.cog.dados)
-
-            # Apaga a mensagem anterior para evitar spam
-            await interaction.message.delete()
-
-            canal = self.canal
-            # Se ainda tem questões, envia próxima
-            if prova["indice"] < NUM_PERGUNTAS:
-                await self.cog.enviar_questao(self.user, canal)
-            else:
-                await self.cog.finalizar_prova(self.user, canal)
-
-            await interaction.response.send_message(f"Resposta {['A','B','C','D'][resposta]} registrada.", ephemeral=True)
-
-    async def finalizar_prova(self, user, canal):
-        uid = str(user.id)
-        prova = self.dados["provas"].pop(uid, None)
-        if not prova:
-            return
-
-        pontos = sum(1 for i, q in enumerate(prova["questoes"]) if prova["respostas"][i] == q["correta"])
-        aprovado = pontos >= MIN_PONTOS
-        status = "✅ APROVADO" if aprovado else "❌ REPROVADO"
+        campo = "\n".join([f"**{letras[i]}** — {a}" for i, a in enumerate(q["alternativas"])])
 
         embed = discord.Embed(
-            title="Resultado da Prova",
-            description=f"{user.mention} obteve {pontos}/{NUM_PERGUNTAS} — {status}",
-            color=0x2ecc71 if aprovado else 0xe74c3c
+            title=f"Questão {prova['indice']+1}/{NUM_PERGUNTAS}",
+            description=f"**{q['pergunta']}**",
+            color=0x374151
         )
+        embed.add_field(name="Alternativas", value=campo, inline=False)
+        embed.set_footer(text="PRF - Sistema de Avaliação Oficial")
 
-        if self.result_channel:
-            ch = self.bot.get_channel(self.result_channel)
-            if ch:
-                await ch.send(embed=embed)
+        await canal.send(user.mention, embed=embed, view=RespostaView(self, user, canal))
+
+    # ========= FINALIZAR ========= #
+    async def finalizar(self, user, canal, tempo=False):
+        prova = self.dados["provas"].pop(str(user.id))
+        salvar(self.dados)
+
+        pontos = sum(1 for i,q in enumerate(prova["questoes"]) if prova["respostas"][i] == q["correta"])
+        aprovado = pontos >= MIN_PONTOS
+
+        titulo = "✅ APROVADO" if aprovado else "❌ REPROVADO"
+        cor = 0x16a34a if aprovado else 0xdc2626
+
+        embed = discord.Embed(title="📊 RESULTADO FINAL", color=cor)
+        embed.add_field(name="Candidato", value=user.mention, inline=False)
+        embed.add_field(name="Pontuação", value=f"{pontos}/{NUM_PERGUNTAS}", inline=False)
+        embed.add_field(name="Situação", value=titulo, inline=False)
+
+        if tempo:
+            embed.add_field(name="Motivo", value="Tempo esgotado", inline=False)
+
+        embed.set_footer(text="PRF • Resultado Oficial")
 
         await canal.send(embed=embed)
 
-        # Remove canal da prova após 1 minuto
-        await asyncio.sleep(60)
-        try:
-            await canal.delete(reason="Encerramento da prova")
-        except:
-            pass
+        if CANAL_RESULTADOS_ID:
+            c = self.bot.get_channel(CANAL_RESULTADOS_ID)
+            if c:
+                await c.send(embed=embed)
 
-    @tasks.loop(hours=24)
+        await asyncio.sleep(20)
+        await canal.delete()
+
+    # ========= LIMPEZA ========= #
+    @tasks.loop(hours=1)
     async def _limpar(self):
         agora = datetime.utcnow()
-        alterou = False
-        for uid, prov in list(self.dados["provas"].items()):
-            try:
-                inicio = datetime.fromisoformat(prov.get("inicio"))
-                if agora - inicio > timedelta(days=7):
-                    self.dados["provas"].pop(uid, None)
-                    alterou = True
-            except Exception:
-                continue
-        for uid, tent in list(self.dados["tentativas"].items()):
-            try:
-                dt = datetime.fromisoformat(tent)
-                if agora - dt > timedelta(days=30):
-                    self.dados["tentativas"].pop(uid, None)
-                    alterou = True
-            except Exception:
-                continue
-        if alterou:
-            salvar(self.dados)
+        for uid in list(self.dados["provas"]):
+            inicio = datetime.fromisoformat(self.dados["provas"][uid]["inicio"])
+            if (agora - inicio).total_seconds() >= TEMPO_LIMITE:
+                try:
+                    canal = self.bot.get_channel(self.dados["provas"][uid]["canal"])
+                    if canal:
+                        user = await self.bot.fetch_user(int(uid))
+                        await self.finalizar(user, canal, tempo=True)
+                except:
+                    pass
 
+# ================= BOTAO DE INICIO ================= #
+class BotaoIniciar(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="✅ INICIAR PROVA", style=discord.ButtonStyle.success)
+    async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = str(interaction.user.id)
+        agora = datetime.utcnow()
+
+        if uid in self.cog.dados["tentativas"]:
+            dt = datetime.fromisoformat(self.cog.dados["tentativas"][uid])
+            if (agora - dt).total_seconds() < COOLDOWN_SEGUNDOS:
+                return await interaction.response.send_message("⏳ Você está em cooldown.", ephemeral=True)
+
+        guild = interaction.guild
+        categoria = guild.get_channel(CATEGORIA_PROVAS_ID)
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True),
+        }
+
+        for rid in DIRETOR_ROLE_IDS:
+            r = guild.get_role(rid)
+            if r:
+                overwrites[r] = discord.PermissionOverwrite(read_messages=True)
+
+        canal = await guild.create_text_channel(
+            name=f"prova-{interaction.user.name}",
+            category=categoria,
+            overwrites=overwrites
+        )
+
+        perguntas = random.sample(PERGUNTAS, NUM_PERGUNTAS)
+        questoes = []
+
+        for p in perguntas:
+            alts = p["alternativas"].copy()
+            random.shuffle(alts)
+            correta = alts.index(p["alternativas"][p["correta"]])
+            questoes.append({"pergunta": p["pergunta"], "alternativas": alts, "correta": correta})
+
+        self.cog.dados["provas"][uid] = {
+            "questoes": questoes,
+            "indice": 0,
+            "respostas": [],
+            "inicio": agora.isoformat(),
+            "canal": canal.id
+        }
+
+        self.cog.dados["tentativas"][uid] = agora.isoformat()
+        salvar(self.cog.dados)
+
+        await interaction.response.send_message(f"✅ Prova iniciada: {canal.mention}", ephemeral=True)
+        await self.cog.enviar_questao(interaction.user, canal)
+
+# ================= BOTÕES DE RESPOSTA ================= #
+class RespostaView(discord.ui.View):
+    def __init__(self, cog, user, canal):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.user = user
+        self.canal = canal
+
+    async def responder(self, interaction, n):
+        prova = self.cog.dados["provas"].get(str(self.user.id))
+        if not prova:
+            return
+
+        prova["respostas"].append(n)
+        prova["indice"] += 1
+        salvar(self.cog.dados)
+
+        await interaction.message.delete()
+
+        if prova["indice"] < NUM_PERGUNTAS:
+            await self.cog.enviar_questao(self.user, self.canal)
+        else:
+            await self.cog.finalizar(self.user, self.canal)
+
+    @discord.ui.button(label="A", style=discord.ButtonStyle.secondary)
+    async def a(self, i, _): await self.responder(i, 0)
+
+    @discord.ui.button(label="B", style=discord.ButtonStyle.secondary)
+    async def b(self, i, _): await self.responder(i, 1)
+
+    @discord.ui.button(label="C", style=discord.ButtonStyle.secondary)
+    async def c(self, i, _): await self.responder(i, 2)
+
+    @discord.ui.button(label="D", style=discord.ButtonStyle.secondary)
+    async def d(self, i, _): await self.responder(i, 3)
+
+# ========= SETUP ========= #
 async def setup(bot):
     await bot.add_cog(Edital(bot))
+    print("✅ Edital carregado corretamente")
