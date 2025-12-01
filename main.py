@@ -282,7 +282,7 @@ async def veradv(interaction: discord.Interaction, usuario: discord.Member):
 # =============================
 
 async def main():
-    async with bot:
-        await bot.start(os.getenv("DISCORD_TOKEN"))
-
+    async with bot: 
+        await bot.load_extension("edital") # CARREGA edital.py 
+        await bot.start(os.getenv("DISCORD_TOKEN")) 
 asyncio.run(main())
