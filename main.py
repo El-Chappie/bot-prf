@@ -244,19 +244,29 @@ async def efetivo(interaction: discord.Interaction):
 @bot.tree.command(name="promover", description="Promover policial PRF")
 async def promover(interaction: discord.Interaction, usuario: discord.Member, cargo: discord.Role):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
+
+    uid = str(usuario.id)
+
+    if uid not in servidores:
+        return await interaction.response.send_message("Este servidor não possui registro ativo.", ephemeral=True)
 
     await usuario.add_roles(cargo)
 
+    servidores[uid]["role"] = cargo.name
+    salvar_serv()
+
     embed = embed_padrao(
-        "📜 ATO DE PROMOÇÃO",
-        f"O servidor {usuario.mention} foi oficialmente promovido para o cargo {cargo.mention}.\n\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        "📜 ATO ADMINISTRATIVO DE PROMOÇÃO",
+        f"O servidor {usuario.mention} foi oficialmente promovido.\n\n"
+        f"🏷 Novo cargo operacional: {cargo.mention}\n"
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}",
         0x16a34a
     )
 
     await enviar(interaction.guild, config["canal_folha"], embed)
     await interaction.response.send_message("Promoção registrada oficialmente.", ephemeral=True)
+
 
 
 # =============================
@@ -272,10 +282,18 @@ async def rebaixar(
     motivo: str
 ):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
+
+    uid = str(usuario.id)
+
+    if uid not in servidores:
+        return await interaction.response.send_message("Este servidor não possui registro ativo.", ephemeral=True)
 
     await usuario.remove_roles(cargo_antigo)
     await usuario.add_roles(cargo_novo)
+
+    servidores[uid]["role"] = cargo_novo.name
+    salvar_serv()
 
     embed = embed_padrao(
         "📉 ATO ADMINISTRATIVO DE REBAIXAMENTO",
@@ -283,12 +301,13 @@ async def rebaixar(
         f"🔻 Cargo anterior: {cargo_antigo.mention}\n"
         f"🔺 Cargo atual: {cargo_novo.mention}\n"
         f"📄 Fundamentação administrativa: {motivo}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}",
         0xf59e0b
     )
 
     await enviar(interaction.guild, config["canal_folha"], embed)
     await interaction.response.send_message("Rebaixamento registrado oficialmente.", ephemeral=True)
+
 
 
 # =============================
@@ -298,7 +317,12 @@ async def rebaixar(
 @bot.tree.command(name="exonerar", description="Exonerar policial PRF")
 async def exonerar(interaction: discord.Interaction, usuario: discord.Member, motivo: str):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
+
+    uid = str(usuario.id)
+
+    if uid not in servidores:
+        return await interaction.response.send_message("Este servidor não possui registro ativo.", ephemeral=True)
 
     cargo_prf = interaction.guild.get_role(CARGO_PRF_ID)
     cargo_civil = interaction.guild.get_role(CARGO_CIVIL_ID)
@@ -308,17 +332,23 @@ async def exonerar(interaction: discord.Interaction, usuario: discord.Member, mo
     if cargo_civil:
         await usuario.add_roles(cargo_civil)
 
+    dados = servidores.pop(uid)
+    salvar_serv()
+
     embed = embed_padrao(
         "📕 ATO FORMAL DE EXONERAÇÃO",
         f"O servidor {usuario.mention} foi oficialmente desligado da Polícia Rodoviária Federal.\n\n"
-        f"📄 Motivação administrativa: {motivo}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        f"🆔 Matrícula: {dados['matricula']}\n"
+        f"🎖 Cargo exercido: {dados['cargo']}\n"
+        f"🏷 Função operacional: {dados['role']}\n"
+        f"📄 Fundamentação administrativa: {motivo}\n"
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}\n\n"
+        f"O servidor encontra-se desligado do quadro de efetivos da PRF.",
         0xc81e1e
     )
 
     await enviar(interaction.guild, config["canal_folha"], embed)
-    await interaction.response.send_message("Exoneração processada oficialmente.", ephemeral=True)
-
+    await interaction.response.send_message("Servidor exonerado e removido do efetivo com sucesso.", ephemeral=True)
 
 # =============================
 # ADVERTÊNCIA
@@ -394,3 +424,4 @@ async def main():
         await bot.start(os.getenv("DISCORD_TOKEN"))
 
 asyncio.run(main())
+
