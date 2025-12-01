@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 ARQ_PROVA = "edital_prova_data.json"
 
 # ========= CONFIGURAÇÃO ========= #
-DIRETOR_ROLE_IDS = []   # IDs dos diretores
-CATEGORIA_PROVAS_ID = None  # ID da categoria "PROVAS PRF"
-CANAL_RESULTADOS_ID = None  # Canal público de resultados
+DIRETOR_ROLE_IDS = [1443387926196260965]   # IDs dos diretores
+CATEGORIA_PROVAS_ID = 1443387998153605262  # ID da categoria "PROVAS PRF"
+CANAL_RESULTADOS_ID = 1443620398016237589  # Canal público de resultados
 
 TEMPO_LIMITE = 600  # 10 minutos
 NUM_PERGUNTAS = 10
