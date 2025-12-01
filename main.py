@@ -1,8 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime
-import json, os
-import asyncio
+import json, os, asyncio
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -17,9 +16,8 @@ ARQ_ADV = "advertencias.json"
 CARGO_CIVIL_ID = 1443537740821037136
 CARGO_PRF_ID = 1443387935700291697
 
-
 # =============================
-# FUNÇÕES UTILITÁRIAS
+# FUNÇÕES DE ARQUIVO
 # =============================
 
 def carregar(arq, padrao):
@@ -41,12 +39,12 @@ def salvar_adv():
     with open(ARQ_ADV, "w", encoding="utf-8") as f:
         json.dump(advertencias, f, indent=4)
 
-def eh_admin(membro):
-    return any(r.id in config["admins"] for r in membro.roles)
+def eh_admin(usuario):
+    return usuario.id in config["admins"] or usuario.guild_permissions.administrator
 
-def embed_padrao(t, d, c=0x2F3136):
-    e = discord.Embed(title=t, description=d, color=c)
-    e.set_footer(text="PRF • Sistema Oficial")
+def embed_padrao(titulo, texto, cor=0x1f2937):
+    e = discord.Embed(title=titulo, description=texto, color=cor)
+    e.set_footer(text="Polícia Rodoviária Federal • Sistema Oficial")
     return e
 
 async def enviar(guild, canal_id, embed):
@@ -55,248 +53,236 @@ async def enviar(guild, canal_id, embed):
         if canal:
             await canal.send(embed=embed)
 
-async def dm_safe(user, embed):
-    try:
-        await user.send(embed=embed)
-    except:
-        pass
-
-
 # =============================
-# EVENTOS
+# INICIALIZAÇÃO
 # =============================
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ BOT ONLINE — {bot.user}")
-
-
-# =============================
-# COMANDOS ADMINISTRATIVOS
-# =============================
-
-@bot.tree.command(name="addadmin", description="Adicionar administrador do sistema")
-async def addadmin(interaction: discord.Interaction, membro: discord.Member):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
-
-    if membro.id not in config["admins"]:
-        config["admins"].append(membro.id)
+    if bot.application.owner and bot.application.owner.id not in config["admins"]:
+        config["admins"].append(bot.application.owner.id)
         salvar_config()
-        await interaction.response.send_message(f"✅ {membro.mention} agora é admin.", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ Usuário já é admin.", ephemeral=True)
 
+    await bot.tree.sync()
+    print(f"✅ BOT PRF ONLINE — {bot.user}")
 
-@bot.tree.command(name="setcanallogs", description="Definir canal de logs do sistema")
-async def setlog(interaction: discord.Interaction, canal: discord.TextChannel):
+# =============================
+# ADMINISTRAÇÃO
+# =============================
+
+@bot.tree.command(name="addadmin", description="Adicionar administrador ao sistema PRF")
+async def addadmin(interaction: discord.Interaction, usuario: discord.Member):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+        return await interaction.response.send_message("Apenas administradores do servidor podem executar este comando.", ephemeral=True)
 
-    config["canal_logs"] = canal.id
-    salvar_config()
-    await interaction.response.send_message("✅ Canal de logs definido.", ephemeral=True)
+    if usuario.id not in config["admins"]:
+        config["admins"].append(usuario.id)
+        salvar_config()
+        await interaction.response.send_message(f"O servidor **{usuario}** foi oficialmente autorizado como administrador do sistema PRF.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Este servidor já possui autorização administrativa.", ephemeral=True)
 
 
-@bot.tree.command(name="setcanalfolha", description="Canal da folha de oficiais")
+@bot.tree.command(name="setcanalfolha", description="Definir canal da folha oficial da PRF")
 async def setfolha(interaction: discord.Interaction, canal: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+        return await interaction.response.send_message("Permissão negada.", ephemeral=True)
 
     config["canal_folha"] = canal.id
     salvar_config()
-    await interaction.response.send_message("✅ Canal da folha definido.", ephemeral=True)
+    await interaction.response.send_message(f"O canal {canal.mention} foi oficialmente definido como folha administrativa.", ephemeral=True)
 
+
+@bot.tree.command(name="setcanallogs", description="Definir canal de logs administrativos")
+async def setlogs(interaction: discord.Interaction, canal: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Permissão negada.", ephemeral=True)
+
+    config["canal_logs"] = canal.id
+    salvar_config()
+    await interaction.response.send_message(f"O canal {canal.mention} foi definido como central de registros internos.", ephemeral=True)
 
 # =============================
-# SISTEMA DE PROMOÇÕES
+# REGISTRO
 # =============================
 
-@bot.tree.command(name="promover", description="Promover policial")
-async def promover(interaction: discord.Interaction, membro: discord.Member, nova_patente: str):
-
+@bot.tree.command(name="registrar", description="Registrar novo policial PRF")
+async def registrar(interaction: discord.Interaction, usuario: discord.Member, cargo: discord.Role, nick: str):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
-
-    embed = embed_padrao(
-        "📜 ATO ADMINISTRATIVO DE PROMOÇÃO",
-        f"A Superintendência da Polícia Rodoviária Federal comunica que o(a) servidor(a) "
-        f"{membro.mention} foi oficialmente promovido(a).\n\n"
-        f"🎖 Nova patente: **{nova_patente}**\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        0x16a34a
-    )
-
-    await enviar(interaction.guild, config.get("canal_folha"), embed)
-    await interaction.response.send_message("✅ Promoção registrada oficialmente.", ephemeral=True)
-
-# =============================
-# SISTEMA DE REGISTRO
-# =============================
-
-@bot.tree.command(name="registrar", description="Registrar um novo policial")
-async def registrar(interaction: discord.Interaction, membro: discord.Member, patente: str):
-
-    if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
 
     cargo_prf = interaction.guild.get_role(CARGO_PRF_ID)
     cargo_civil = interaction.guild.get_role(CARGO_CIVIL_ID)
 
-    if not cargo_prf:
-        return await interaction.response.send_message("❌ Cargo PRF não encontrado.", ephemeral=True)
+    nome = f"『PRF』{cargo.name}│{nick}"
 
-    await membro.add_roles(cargo_prf)
+    try:
+        await usuario.edit(nick=nome)
+    except:
+        pass
+
+    if cargo_prf:
+        await usuario.add_roles(cargo_prf)
+    await usuario.add_roles(cargo)
+
     if cargo_civil:
-        await membro.remove_roles(cargo_civil)
+        await usuario.remove_roles(cargo_civil)
 
     embed = embed_padrao(
-        "📑 REGISTRO OFICIAL",
-        f"A Superintendência da Polícia Rodoviária Federal informa que o(a) cidadão(ã) {membro.mention} "
-        f"foi oficialmente incorporado(a) ao efetivo da PRF.\n\n"
-        f"📛 Patente inicial: **{patente}**\n"
+        "📑 ATO OFICIAL DE INCORPORAÇÃO",
+        f"A Superintendência da Polícia Rodoviária Federal comunica que o(a) cidadão(ã) {usuario.mention} "
+        f"foi oficialmente incorporado(a) ao efetivo da corporação.\n\n"
+        f"🎖 Cargo: {cargo.mention}\n"
+        f"🪪 Nome de serviço: {nome}\n"
         f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
         0x2563eb
     )
 
-    await enviar(interaction.guild, config.get("canal_folha"), embed)
-    await interaction.response.send_message("✅ Registro efetuado com êxito.", ephemeral=True)
+    await enviar(interaction.guild, config["canal_folha"], embed)
+    await interaction.response.send_message("Registro efetuado com êxito.", ephemeral=True)
 
 # =============================
-# SISTEMA DE EXONERACAO
+# PROMOÇÃO
 # =============================
 
-@bot.tree.command(name="exonerar", description="Exonerar policial da PRF")
-async def exonerar(interaction: discord.Interaction, membro: discord.Member, motivo: str):
-
+@bot.tree.command(name="promover", description="Promover policial PRF")
+async def promover(interaction: discord.Interaction, usuario: discord.Member, cargo: discord.Role):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+    await usuario.add_roles(cargo)
+
+    embed = embed_padrao(
+        "📜 ATO DE PROMOÇÃO",
+        f"O servidor {usuario.mention} foi oficialmente promovido para o cargo {cargo.mention}.\n\n"
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        0x16a34a
+    )
+
+    await enviar(interaction.guild, config["canal_folha"], embed)
+    await interaction.response.send_message("Promoção registrada oficialmente.", ephemeral=True)
+
+# =============================
+# REBAIXAMENTO
+# =============================
+
+@bot.tree.command(name="rebaixar", description="Rebaixar policial PRF")
+async def rebaixar(interaction: discord.Interaction, usuario: discord.Member, cargo_antigo: discord.Role, cargo_novo: discord.Role, motivo: str):
+    if not eh_admin(interaction.user):
+        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+    await usuario.remove_roles(cargo_antigo)
+    await usuario.add_roles(cargo_novo)
+
+    embed = embed_padrao(
+        "📉 ATO ADMINISTRATIVO DE REBAIXAMENTO",
+        f"O servidor {usuario.mention} teve seu cargo alterado oficialmente.\n\n"
+        f"🔻 Cargo anterior: {cargo_antigo.mention}\n"
+        f"🔺 Cargo atual: {cargo_novo.mention}\n"
+        f"📄 Fundamentação administrativa: {motivo}\n"
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        0xf59e0b
+    )
+
+    await enviar(interaction.guild, config["canal_folha"], embed)
+    await interaction.response.send_message("Rebaixamento registrado oficialmente.", ephemeral=True)
+
+# =============================
+# EXONERAÇÃO
+# =============================
+
+@bot.tree.command(name="exonerar", description="Exonerar policial PRF")
+async def exonerar(interaction: discord.Interaction, usuario: discord.Member, motivo: str):
+    if not eh_admin(interaction.user):
+        return await interaction.response.send_message("Acesso negado.", ephemeral=True)
 
     cargo_prf = interaction.guild.get_role(CARGO_PRF_ID)
     cargo_civil = interaction.guild.get_role(CARGO_CIVIL_ID)
 
     if cargo_prf:
-        await membro.remove_roles(cargo_prf)
+        await usuario.remove_roles(cargo_prf)
     if cargo_civil:
-        await membro.add_roles(cargo_civil)
+        await usuario.add_roles(cargo_civil)
 
     embed = embed_padrao(
-        "📕 ATO DE EXONERAÇÃO",
-        f"A Superintendência da Polícia Rodoviária Federal comunica que o(a) servidor(a) "
-        f"{membro.mention} foi oficialmente exonerado(a) da corporação.\n\n"
-        f"📄 Motivo: {motivo}\n"
+        "📕 ATO FORMAL DE EXONERAÇÃO",
+        f"O servidor {usuario.mention} foi oficialmente desligado da Polícia Rodoviária Federal.\n\n"
+        f"📄 Motivação administrativa: {motivo}\n"
         f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        0xdc2626
+        0xc81e1e
     )
 
-    await enviar(interaction.guild, config.get("canal_folha"), embed)
-    await interaction.response.send_message("✅ Exoneração registrada oficialmente.", ephemeral=True)
+    await enviar(interaction.guild, config["canal_folha"], embed)
+    await interaction.response.send_message("Exoneração processada oficialmente.", ephemeral=True)
 
 # =============================
-# SISTEMA DE REBAIXAMENTO
+# ADVERTÊNCIA
 # =============================
 
-@bot.tree.command(name="rebaixar", description="Rebaixar policial")
-async def rebaixar(interaction: discord.Interaction, membro: discord.Member, nova_patente: str, motivo: str):
-
+@bot.tree.command(name="advertir", description="Aplicar advertência administrativa")
+async def advertir(interaction: discord.Interaction, usuario: discord.Member, fundamento: str):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso administrativo não autorizado.", ephemeral=True)
 
-    embed = embed_padrao(
-        "📉 ATO ADMINISTRATIVO DE REBAIXAMENTO",
-        f"A Superintendência da Polícia Rodoviária Federal informa que o(a) servidor(a) "
-        f"{membro.mention} teve sua patente revista por decisão administrativa.\n\n"
-        f"🎖 Nova patente: **{nova_patente}**\n"
-        f"📄 Motivo: {motivo}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        0xf59e0b
-    )
-
-    await enviar(interaction.guild, config.get("canal_folha"), embed)
-    await interaction.response.send_message("✅ Rebaixamento registrado oficialmente.", ephemeral=True)
-
-
-
-# =============================
-# SISTEMA DE ADVERTÊNCIAS
-# =============================
-
-@bot.tree.command(name="advertir", description="Registrar advertência administrativa")
-async def advertir(interaction: discord.Interaction, membro: discord.Member, motivo: str):
-
-    if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
-
-    uid = str(membro.id)
+    uid = str(usuario.id)
 
     if uid not in advertencias:
         advertencias[uid] = []
 
     registro = {
         "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "motivo": motivo,
-        "aplicador": interaction.user.name
+        "fundamento": fundamento,
+        "responsavel": interaction.user.name
     }
 
     advertencias[uid].append(registro)
     salvar_adv()
 
-    total = len(advertencias[uid])
-
     embed = embed_padrao(
-        "📄 REGISTRO OFICIAL DE ADVERTÊNCIA",
-        f"A Superintendência da Polícia Rodoviária Federal informa que o(a) servidor(a) {membro.mention} "
-        f"recebeu uma advertência administrativa interna, conforme os termos a seguir:\n\n"
-        f"📌 Fundamentação: {motivo}\n"
-        f"👮 Aplicador: {interaction.user.name}\n"
+        "📄 REGISTRO DISCIPLINAR",
+        f"O servidor {usuario.mention} recebeu advertência administrativa formal.\n\n"
+        f"📜 Fundamentação legal: {fundamento}\n"
+        f"👮 Autoridade responsável: {interaction.user.name}\n"
         f"📅 Data: {registro['data']}\n"
-        f"📂 Total de advertências: {total}",
+        f"📂 Ocorrências registradas: {len(advertencias[uid])}",
         0xf97316
     )
 
-    await enviar(interaction.guild, config.get("canal_logs"), embed)
-    await interaction.response.send_message("✅ Advertência registrada com sucesso.", ephemeral=True)
+    await enviar(interaction.guild, config["canal_logs"], embed)
+    await interaction.response.send_message("Advertência aplicada com sucesso.", ephemeral=True)
 
+# =============================
+# CONSULTA DE ADVERTÊNCIAS
+# =============================
 
-
-@bot.tree.command(name="veradv", description="Consultar histórico disciplinar de um servidor")
-async def veradv(interaction: discord.Interaction, membro: discord.Member):
-
+@bot.tree.command(name="veradv", description="Consultar ficha disciplinar")
+async def veradv(interaction: discord.Interaction, usuario: discord.Member):
     if not eh_admin(interaction.user):
-        return await interaction.response.send_message("❌ Acesso negado.", ephemeral=True)
+        return await interaction.response.send_message("Acesso restrito.", ephemeral=True)
 
-    uid = str(membro.id)
+    uid = str(usuario.id)
 
-    if uid not in advertencias or not advertencias[uid]:
-        return await interaction.response.send_message("✅ Nenhuma advertência registrada.", ephemeral=True)
+    if uid not in advertencias:
+        return await interaction.response.send_message("Não há registros disciplinares para este servidor.", ephemeral=True)
 
     texto = ""
     for i, adv in enumerate(advertencias[uid], 1):
         texto += (
             f"#{i}\n"
             f"📅 Data: {adv['data']}\n"
-            f"📄 Motivo: {adv['motivo']}\n"
-            f"👮 Aplicador: {adv['aplicador']}\n\n"
+            f"📜 Fundamentação: {adv['fundamento']}\n"
+            f"👮 Responsável: {adv['responsavel']}\n\n"
         )
 
-    embed = embed_padrao(
-        "📂 HISTÓRICO DISCIPLINAR",
-        f"Servidor: {membro.mention}\n\n{texto}",
-        0x9333ea
-    )
-
+    embed = embed_padrao("📂 FICHA ADMINISTRATIVA", f"Servidor: {usuario.mention}\n\n{texto}", 0x9333ea)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-
 # =============================
-# INICIALIZAÇÃO EM MODO SEGURO
+# INICIALIZAÇÃO
 # =============================
 
 async def main():
     async with bot:
-        await bot.load_extension("edital")  # CARREGA edital.py
         await bot.start(os.getenv("DISCORD_TOKEN"))
 
 asyncio.run(main())
