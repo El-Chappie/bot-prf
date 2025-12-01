@@ -12,6 +12,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 ARQ_CONFIG = "config.json"
 ARQ_ADV = "advertencias.json"
+ARQ_SERV = "servidores.json"
 
 CARGO_CIVIL_ID = 1443537740821037136
 CARGO_PRF_ID = 1443387935700291697
@@ -30,6 +31,7 @@ def carregar(arq, padrao):
 
 config = carregar(ARQ_CONFIG, {"admins": [], "canal_folha": None, "canal_logs": None})
 advertencias = carregar(ARQ_ADV, {})
+servidores = carregar(ARQ_SERV, {})
 
 def salvar_config():
     with open(ARQ_CONFIG, "w", encoding="utf-8") as f:
@@ -38,6 +40,10 @@ def salvar_config():
 def salvar_adv():
     with open(ARQ_ADV, "w", encoding="utf-8") as f:
         json.dump(advertencias, f, indent=4)
+
+def salvar_serv():
+    with open(ARQ_SERV, "w", encoding="utf-8") as f:
+        json.dump(servidores, f, indent=4)
 
 def eh_admin(usuario):
     return usuario.id in config["admins"] or usuario.guild_permissions.administrator
@@ -78,7 +84,9 @@ async def addadmin(interaction: discord.Interaction, usuario: discord.Member):
     if usuario.id not in config["admins"]:
         config["admins"].append(usuario.id)
         salvar_config()
-        await interaction.response.send_message(f"O servidor **{usuario}** foi oficialmente autorizado como administrador do sistema PRF.", ephemeral=True)
+        await interaction.response.send_message(
+            f"O servidor **{usuario}** foi oficialmente autorizado como administrador do sistema PRF.", ephemeral=True
+        )
     else:
         await interaction.response.send_message("Este servidor já possui autorização administrativa.", ephemeral=True)
 
@@ -90,7 +98,9 @@ async def setfolha(interaction: discord.Interaction, canal: discord.TextChannel)
 
     config["canal_folha"] = canal.id
     salvar_config()
-    await interaction.response.send_message(f"O canal {canal.mention} foi oficialmente definido como folha administrativa.", ephemeral=True)
+    await interaction.response.send_message(
+        f"O canal {canal.mention} foi oficialmente definido como folha administrativa.", ephemeral=True
+    )
 
 
 @bot.tree.command(name="setcanallogs", description="Definir canal de logs administrativos")
@@ -100,7 +110,9 @@ async def setlogs(interaction: discord.Interaction, canal: discord.TextChannel):
 
     config["canal_logs"] = canal.id
     salvar_config()
-    await interaction.response.send_message(f"O canal {canal.mention} foi definido como central de registros internos.", ephemeral=True)
+    await interaction.response.send_message(
+        f"O canal {canal.mention} foi definido como central de registros internos.", ephemeral=True
+    )
 
 # =============================
 # REGISTRO
@@ -122,15 +134,24 @@ async def registrar(
     if uid in servidores:
         return await interaction.response.send_message("Este servidor já se encontra registrado no sistema.", ephemeral=True)
 
+    if role.name.lower() in cargo.lower():
+        return await interaction.response.send_message(
+            "O cargo administrativo não pode ser o mesmo que o cargo operacional.",
+            ephemeral=True
+        )
+
     cargo_prf = interaction.guild.get_role(CARGO_PRF_ID)
     cargo_civil = interaction.guild.get_role(CARGO_CIVIL_ID)
 
     nome_formatado = f"『PRF』{cargo}│{nome}"
 
     try:
-        await usuario.edit(nick=nome_formatado)
-    except:
-        pass
+        await usuario.edit(nick=nome_formatado[:32])
+    except discord.Forbidden:
+        return await interaction.response.send_message(
+            "Não possuo permissão para alterar o apelido deste usuário.",
+            ephemeral=True
+        )
 
     await usuario.add_roles(role)
     if cargo_prf:
@@ -167,7 +188,7 @@ async def registrar(
 
 
 # =============================
-# VER SERVLDOR
+# VER SERVIDOR
 # =============================
 
 @bot.tree.command(name="verficha", description="Consultar ficha funcional de um servidor")
@@ -197,7 +218,7 @@ async def verficha(interaction: discord.Interaction, usuario: discord.Member):
 
 
 # =============================
-# VER EFETLVO
+# VER EFETIVO
 # =============================
 
 @bot.tree.command(name="efetivo", description="Listar policiais ativos da PRF")
@@ -237,12 +258,19 @@ async def promover(interaction: discord.Interaction, usuario: discord.Member, ca
     await enviar(interaction.guild, config["canal_folha"], embed)
     await interaction.response.send_message("Promoção registrada oficialmente.", ephemeral=True)
 
+
 # =============================
 # REBAIXAMENTO
 # =============================
 
 @bot.tree.command(name="rebaixar", description="Rebaixar policial PRF")
-async def rebaixar(interaction: discord.Interaction, usuario: discord.Member, cargo_antigo: discord.Role, cargo_novo: discord.Role, motivo: str):
+async def rebaixar(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    cargo_antigo: discord.Role,
+    cargo_novo: discord.Role,
+    motivo: str
+):
     if not eh_admin(interaction.user):
         return await interaction.response.send_message("Acesso negado.", ephemeral=True)
 
@@ -261,6 +289,7 @@ async def rebaixar(interaction: discord.Interaction, usuario: discord.Member, ca
 
     await enviar(interaction.guild, config["canal_folha"], embed)
     await interaction.response.send_message("Rebaixamento registrado oficialmente.", ephemeral=True)
+
 
 # =============================
 # EXONERAÇÃO
@@ -289,6 +318,7 @@ async def exonerar(interaction: discord.Interaction, usuario: discord.Member, mo
 
     await enviar(interaction.guild, config["canal_folha"], embed)
     await interaction.response.send_message("Exoneração processada oficialmente.", ephemeral=True)
+
 
 # =============================
 # ADVERTÊNCIA
@@ -326,6 +356,7 @@ async def advertir(interaction: discord.Interaction, usuario: discord.Member, fu
     await enviar(interaction.guild, config["canal_logs"], embed)
     await interaction.response.send_message("Advertência aplicada com sucesso.", ephemeral=True)
 
+
 # =============================
 # CONSULTA DE ADVERTÊNCIAS
 # =============================
@@ -352,13 +383,14 @@ async def veradv(interaction: discord.Interaction, usuario: discord.Member):
     embed = embed_padrao("📂 FICHA ADMINISTRATIVA", f"Servidor: {usuario.mention}\n\n{texto}", 0x9333ea)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # =============================
 # INICIALIZAÇÃO
 # =============================
 
 async def main():
     async with bot: 
-        await bot.load_extension("edital") # CARREGA edital.py 
-        await bot.start(os.getenv("DISCORD_TOKEN")) 
-asyncio.run(main())
+        await bot.load_extension("edital")
+        await bot.start(os.getenv("DISCORD_TOKEN"))
 
+asyncio.run(main())
