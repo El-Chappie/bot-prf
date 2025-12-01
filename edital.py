@@ -47,6 +47,7 @@ class Edital(commands.Cog):
     # -------- CONTROLE DIRETOR -------- #
 
     @commands.hybrid_command(name="bloquearprovas")
+    @commands.has_permissions(administrator=True)
     async def bloquear(self, ctx):
         if not any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles):
             return await ctx.reply("❌ Apenas diretores.", ephemeral=True)
@@ -55,6 +56,7 @@ class Edital(commands.Cog):
         await ctx.reply("🚫 Provas bloqueadas.", ephemeral=True)
 
     @commands.hybrid_command(name="liberarprovas")
+    @commands.has_permissions(administrator=True)
     async def liberar(self, ctx):
         if not any(r.id in DIRETOR_ROLE_IDS for r in ctx.author.roles):
             return await ctx.reply("❌ Apenas diretores.", ephemeral=True)
