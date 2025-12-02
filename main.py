@@ -260,7 +260,7 @@ async def promover(interaction: discord.Interaction, usuario: discord.Member, ca
         "📜 ATO ADMINISTRATIVO DE PROMOÇÃO",
         f"O servidor {usuario.mention} foi oficialmente promovido.\n\n"
         f"🏷 Novo cargo operacional: {cargo.mention}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}",
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
         0x16a34a
     )
 
@@ -301,7 +301,7 @@ async def rebaixar(
         f"🔻 Cargo anterior: {cargo_antigo.mention}\n"
         f"🔺 Cargo atual: {cargo_novo.mention}\n"
         f"📄 Fundamentação administrativa: {motivo}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}",
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
         0xf59e0b
     )
 
@@ -342,7 +342,7 @@ async def exonerar(interaction: discord.Interaction, usuario: discord.Member, mo
         f"🎖 Cargo exercido: {dados['cargo']}\n"
         f"🏷 Função operacional: {dados['role']}\n"
         f"📄 Fundamentação administrativa: {motivo}\n"
-        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M)}\n\n"
+        f"📅 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
         f"O servidor encontra-se desligado do quadro de efetivos da PRF.",
         0xc81e1e
     )
@@ -425,5 +425,6 @@ async def main():
         await bot.start(os.getenv("DISCORD_TOKEN"))
 
 asyncio.run(main())
+
 
 
