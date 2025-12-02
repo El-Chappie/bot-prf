@@ -5,12 +5,11 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, timedelta
+from datetime import datetime
 import sqlite3
 import io
 import csv
 import random
-import asyncio
 
 # -----------------------------
 # CONFIGURAÇÃO (ajuste IDs conforme seu servidor)
@@ -29,7 +28,7 @@ ANTIFRAUDE_PROB = 0.12          # probabilidade de checagem por usuário em cada
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cur = conn.cursor()
 
-# Cria tabelas
+# Cria tabelas se não existirem
 cur.execute("""
 CREATE TABLE IF NOT EXISTS pontos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,16 +243,14 @@ class PainelView(discord.ui.View):
         self.bot = bot
 
     async def checar_permissoes_entrada(self, interaction: discord.Interaction):
-        # check voice channel requirement
+        # checa se precisa estar em uma call específica
         if CALL_PERMITIDA:
             if not interaction.user.voice or interaction.user.voice.channel.id != CALL_PERMITIDA:
                 return False, "Você precisa estar na call oficial para iniciar/encerrar serviço."
-        # check role requirement
+        # checa se precisa ter role específica
         if ROLE_OBRIGATORIA:
             if ROLE_OBRIGATORIA not in [r.id for r in interaction.user.roles]:
                 return False, "Você não possui a role necessária para operar o painel de ponto."
-        # check canal autorizado if CANAL_PAINEL_ID defined (optional)
-        # Not enforcing channel here - painel command manages where to post
         return True, None
 
     @discord.ui.button(label="✅ Entrar em serviço", style=discord.ButtonStyle.success, custom_id="ponto:entrar")
@@ -376,4 +373,236 @@ class FolhaPontoPRF(commands.Cog):
     @app_commands.command(name="painelponto", description="Publicar painel de ponto com botões (Admin)")
     async def painelponto(self, interaction: discord.Interaction):
         if not eh_admin(interaction.user):
-            return await interaction.response.send_message("Acesso negado_
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="🕘 PAINEL DE FOLHA DE PONTO — PRF",
+            description=(
+                "Use os botões abaixo para iniciar/encerrar expediente ou para abrir sua folha.\n\n"
+                f"Jornada mínima diária: **{TEMPO_MINIMO_DIARIO//3600} horas**.\n"
+                "Atenção: sistema com auditoria automática e controles antifraude."
+            ),
+            color=0x0ea5e9
+        )
+        view = PainelView(self.bot)
+        await interaction.channel.send(embed=embed, view=view)
+        await interaction.response.send_message("Painel publicado.", ephemeral=True)
+
+    # Ver folha de um servidor (admin)
+    @app_commands.command(name="verfolha", description="Ver folha de ponto de um servidor (Admin)")
+    async def verfolha(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        uid = usuario.id
+        cur.execute("SELECT dia FROM pontos WHERE user_id = ? ORDER BY dia DESC", (uid,))
+        dias = [r[0] for r in cur.fetchall()]
+        if not dias:
+            return await interaction.response.send_message("Servidor sem registros.", ephemeral=True)
+
+        texto = ""
+        for dia in dias:
+            turnos = obter_turnos_do_dia(uid, dia)
+            total = 0
+            linhas = []
+            for ent, sai in turnos:
+                ent_s = hora_str(ent)
+                sai_s = hora_str(sai) if sai else "⏳"
+                linhas.append(f"{ent_s} → {sai_s}")
+                if sai:
+                    total += (int(sai) - int(ent))
+            texto += f"**{dia}** — {tempo_seg_str(total)}\n" + "\n".join(f"  • {l}" for l in linhas) + "\n\n"
+
+        embed = discord.Embed(title=f"📊 FOLHA — {usuario}", description=texto[:3500], color=0x2563eb)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Registrar apreensão (admin)
+    @app_commands.command(name="registrarapreensao", description="Registrar apreensão (Admin)")
+    async def registrarapreensao(
+        self,
+        interaction: discord.Interaction,
+        usuario: discord.Member,
+        descricao: str,
+        tipo: str,
+        drogas: str = "",
+        veiculos: str = "",
+        valor: float = 0.0
+    ):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        aid = adicionar_apreensao(usuario.id, descricao, tipo, drogas, veiculos, valor, interaction.user.id)
+
+        embed = discord.Embed(
+            title="📦 Registro de Apreensão",
+            description=(
+                f"Servidor: {usuario.mention}\n"
+                f"Tipo: {tipo}\n"
+                f"Descrição: {descricao}\n"
+                f"Drogas: {drogas or '—'}\n"
+                f"Veículos: {veiculos or '—'}\n"
+                f"Valor estimado: R$ {valor:.2f}\n"
+                f"Registrado por: {interaction.user.mention}\n"
+                f"ID: {aid}"
+            ),
+            color=0x9f1239
+        )
+        await enviar_para_folha(interaction.guild, embed)
+        await interaction.response.send_message("Apreensão registrada com sucesso.", ephemeral=True)
+
+    # Registrar multa (admin)
+    @app_commands.command(name="registrarmulta", description="Registrar multa administrativa (Admin)")
+    async def registrarmulta(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        mid = adicionar_multa(usuario.id, valor, motivo, interaction.user.id)
+
+        embed = discord.Embed(
+            title="💸 Registro de Multa",
+            description=(
+                f"Servidor: {usuario.mention}\n"
+                f"Valor: R$ {valor:.2f}\n"
+                f"Motivo: {motivo}\n"
+                f"Registrado por: {interaction.user.mention}\n"
+                f"ID: {mid}"
+            ),
+            color=0xda8b00
+        )
+        await enviar_para_folha(interaction.guild, embed)
+        await interaction.response.send_message("Multa registrada com sucesso.", ephemeral=True)
+
+    # Ver apreensões (admin)
+    @app_commands.command(name="verapreensoes", description="Ver apreensões de um servidor (Admin)")
+    async def verapreensoes(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        arr = obter_apreensoes(usuario.id)
+        if not arr:
+            return await interaction.response.send_message("Nenhuma apreensão registrada para este servidor.", ephemeral=True)
+
+        texto = ""
+        for a in arr:
+            texto += f"• [{a[0]}] {a[1]} {a[2]} — {a[4]} — {a[3]} (R$ {a[7]:.2f})\n"
+
+        embed = discord.Embed(title=f"📦 Apreensões — {usuario}", description=texto[:3500], color=0x9f1239)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Ver multas (admin)
+    @app_commands.command(name="vermultas", description="Ver multas de um servidor (Admin)")
+    async def vermultas(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        arr = obter_multas(usuario.id)
+        if not arr:
+            return await interaction.response.send_message("Nenhuma multa registrada para este servidor.", ephemeral=True)
+
+        texto = ""
+        total = 0.0
+        for m in arr:
+            texto += f"• [{m[0]}] {m[1]} {m[2]} — R$ {m[3]:.2f} — {m[4]}\n"
+            total += m[3]
+
+        embed = discord.Embed(title=f"💸 Multas — {usuario}", description=texto[:3500], color=0xda8b00)
+        embed.add_field(name="Total aplicado", value=f"R$ {total:.2f}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Remover registro (admin)
+    @app_commands.command(name="removerregistro", description="Remover registro de apreensão/multa/ponto (Admin)")
+    async def removerregistro(self, interaction: discord.Interaction, tipo: str, usuario: discord.Member, registro_id: str):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+        uid = usuario.id
+        if tipo.lower() == "apreensao":
+            cur.execute("DELETE FROM apreensoes WHERE id = ? AND user_id = ?", (registro_id, uid))
+            conn.commit()
+            log_db("remover_apreensao", uid, interaction.user.id, registro_id)
+            return await interaction.response.send_message("Registro de apreensão removido (se existia).", ephemeral=True)
+        if tipo.lower() == "multa":
+            cur.execute("DELETE FROM multas WHERE id = ? AND user_id = ?", (registro_id, uid))
+            conn.commit()
+            log_db("remover_multa", uid, interaction.user.id, registro_id)
+            return await interaction.response.send_message("Registro de multa removido (se existia).", ephemeral=True)
+        return await interaction.response.send_message("Tipo inválido. Use 'apreensao' ou 'multa'.", ephemeral=True)
+
+    # Exportar folha (CSV)
+    @app_commands.command(name="exportarfolha", description="Exportar folha de um servidor em CSV (Admin)")
+    async def exportarfolha(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+
+        # monta CSV com todos os turnos do usuário
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["data", "entrada_iso", "saida_iso", "duracao_segundos"])
+        cur.execute("""
+            SELECT p.dia, t.entrada, t.saida FROM turnos t
+            JOIN pontos p ON t.ponto_id = p.id
+            WHERE p.user_id = ?
+            ORDER BY p.dia ASC, t.entrada ASC
+        """, (usuario.id,))
+        for dia, ent, sai in cur.fetchall():
+            entrada_iso = datetime.utcfromtimestamp(int(ent)).isoformat() if ent else ""
+            saida_iso = datetime.utcfromtimestamp(int(sai)).isoformat() if sai else ""
+            dur = int(sai) - int(ent) if sai else ""
+            writer.writerow([dia, entrada_iso, saida_iso, dur])
+        output.seek(0)
+        file = discord.File(fp=io.BytesIO(output.getvalue().encode("utf-8")), filename=f"folha_{usuario.id}.csv")
+        await interaction.response.send_message("Exportando folha...", file=file, ephemeral=True)
+
+    # Ver logs (admin)
+    @app_commands.command(name="verlogs", description="Ver logs de auditoria (Admin)")
+    async def verlogs(self, interaction: discord.Interaction, limit: int = 30):
+        if not eh_admin(interaction.user):
+            return await interaction.response.send_message("Acesso negado.", ephemeral=True)
+        cur.execute("SELECT ts, tipo, usuario, autor, detalhes FROM logs ORDER BY ts DESC LIMIT ?", (limit,))
+        rows = cur.fetchall()
+        texto = ""
+        for ts, tipo, usuario, autor, detalhes in rows:
+            ts_s = datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+            texto += f"{ts_s} | {tipo} | u:{usuario} | autor:{autor} | {detalhes}\n"
+        if not texto:
+            texto = "Sem logs."
+        embed = discord.Embed(title="📝 Logs de Auditoria", description=texto[:3500], color=0x64748b)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# -----------------------------
+# Função Helper: enviar embed para canal da folha (se configurado)
+# -----------------------------
+async def enviar_para_folha(guild: discord.Guild, embed: discord.Embed):
+    canal = None
+    if CANAL_PAINEL_ID:
+        canal = guild.get_channel(CANAL_PAINEL_ID)
+    if not canal:
+        for c in guild.text_channels:
+            if c.permissions_for(guild.me).send_messages:
+                canal = c
+                break
+    if canal:
+        try:
+            await canal.send(embed=embed)
+        except Exception:
+            pass
+
+# -----------------------------
+# Reuso da função eh_admin do main, com fallback
+# -----------------------------
+try:
+    from __main__ import eh_admin as eh_admin_main
+    def eh_admin(user):
+        try:
+            return eh_admin_main(user)
+        except Exception:
+            return user.guild_permissions.administrator
+except Exception:
+    def eh_admin(user):
+        return user.guild_permissions.administrator
+
+# -----------------------------
+# SETUP
+# -----------------------------
+async def setup(bot):
+    bot.add_view(PainelView(bot))
+    await bot.add_cog(FolhaPontoPRF(bot))
